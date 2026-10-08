@@ -34,7 +34,11 @@ coverage/
 
 # Agent runtime data
 .agent-state/
+.miops/
 logs/
 artifacts/
 tmp/
 temp/
+
+# Local MI operations configuration
+config/miops.local.json

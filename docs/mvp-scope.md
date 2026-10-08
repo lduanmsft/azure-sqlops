@@ -1,153 +1,86 @@
 # MVP Scope
 
-> **Status:** Proposed scope and acceptance criteria. No scenario is implemented or tenant validated in this repository.
+> **Status:** Repository logic is implemented and locally validated. No Azure tenant, support entitlement, or Managed Instance lifecycle operation has been validated by this repository.
 
-## Objective
+## Runtime decision
 
-Provide a safe operator assistant for a bounded set of Azure SQL Managed Instance operations, diagnostics, capacity decisions, and support escalation. The MVP prioritizes control and evidence over autonomous remediation.
+Phase 1 uses local GitHub Copilot CLI, public/open-source skill definitions, PowerShell 7, and Azure CLI/ARM. Azure SRE Agent is neither required nor included.
 
-## In scope
+## Implemented
 
-### MI status and lifecycle
+- One configured MI and an exact canonical resource allowlist.
+- JSON config validation and ignored local config.
+- Azure CLI/login/subscription/provider/read-access preflight where observable.
+- MI status/configuration read.
+- Conservative lifecycle eligibility checks.
+- Start/stop dry-run and explicit exact-resource confirmation.
+- Non-blocking lifecycle submission and durable local operation records.
+- Later resource-state polling and verified desired-state detection.
+- Start/stop schedule inspection and guarded deletion.
+- Plan-only schedule guidance; no creation/update.
+- Azure Activity Log, Resource Health, ARM, and advertised metric evidence.
+- Explicit evidence gaps.
+- Redacted local audit, evidence, and Support draft files.
+- Disabled optional SQL diagnostic interface.
+- Local focused tests.
 
-- Resolve an existing MI only from an allowlisted subscription/resource group/resource ID.
-- Read provisioning and lifecycle state.
-- Explain whether the current request is actionable.
-- Start or stop an eligible MI through `az sql mi` or ARM.
-- Execute approved start/stop schedules.
-- Track long-running operations durably and verify the terminal resource state.
-- Detect duplicate, stale, or conflicting requests.
+## Not implemented
 
-Stop/start eligibility varies by configuration and current Azure limitations. The agent must perform a current eligibility and state check rather than encode a universal claim of support.
+- Automatic stop or background schedule execution.
+- Azure-native schedule creation/update.
+- Automatic resize or resize submission.
+- SQL DMV or Query Store collection.
+- SQL remediation, T-SQL execution, session termination, or configuration changes.
+- Microsoft Support REST API submission.
+- Distributed locks, multi-host state, immutable audit export, or hosted availability.
+- Tenant-specific permission provisioning.
 
-### Read-only troubleshooting
+## Lifecycle safety
 
-- Gather Azure resource configuration, Activity Log, Resource Health, platform metrics, and alert context.
-- Gather approved SQL metadata and DMV evidence when a separate SQL identity has been configured.
-- Correlate evidence for a defined time window.
-- Identify likely causes, competing hypotheses, confidence, and evidence gaps.
-- Recommend operator actions without making SQL, configuration, or data changes.
+`start`, `stop`, and `schedule-delete` are dry-run unless both conditions are present:
 
-### Capacity and resize recommendation
+1. `-Apply`
+2. `-ApproveResourceId` exactly equals the configured allowlisted resource ID
 
-- Summarize compute, memory, storage, I/O, and workload evidence available to the configured collectors.
-- Distinguish transient spikes from sustained pressure.
-- Estimate growth and identify headroom or overprovisioning.
-- Recommend a candidate resize direction and target with assumptions, risks, and a verification plan.
-- Produce a reviewable recommendation artifact.
+Before lifecycle submission, the tool reads current MI state and applies conservative local eligibility rules. Azure remains authoritative and may reject operations due to configuration, platform limitations, locks, ongoing operations, maintenance, policy, or permissions.
 
-The MVP does **not** submit a resize operation.
+Start operations can be long-running. The tool persists intent before submission, records the Azure response when available, and requires later polling. A submitted operation is not a verified success.
 
-### Azure Support escalation
+## Evidence and recommendations
 
-- Check whether required support-plan/API prerequisites appear to be present.
-- Draft a redacted support request with resource context, impact, timeline, troubleshooting performed, and requested assistance.
-- Display the exact payload for review.
-- Create a support request only after explicit authorization for that ticket.
-- Persist the request identifier and audit evidence.
+The evidence bundle is read-only and bounded to 1-168 hours. It records unavailable sources rather than inventing results. Capacity interpretation is guided by the skill but remains a human/Copilot analysis of available evidence; no resize action exists.
 
-Support API behavior and entitlement are tenant-specific prerequisites. Drafting can remain available when creation is unavailable.
+Azure Monitor metric names vary by resource and configuration. Operators should adjust the configured metric list after inspecting what Azure advertises.
 
-## Out of scope
+## SQL-engine diagnostics
 
-- Provisioning, deleting, restoring, failing over, patching, or reconfiguring MI.
-- Automatic compute or storage resize.
-- Executing T-SQL remediation, killing sessions, changing indexes, or changing database settings.
-- Access to arbitrary subscriptions or resources not on the allowlist.
-- Autonomous incident declaration or closure.
-- Support severity selection beyond policy-approved bounds.
-- Uploading raw query text, result sets, credentials, secrets, or unredacted personal/customer data to support.
-- Cost guarantees, SLA guarantees, or claims of root cause without sufficient evidence.
-- Replacing Azure Service Health, Azure Monitor, a DBA, or Microsoft Support.
+SQL diagnostics are optional and disabled. A future adapter must use a separate SQL principal because Azure RBAC does not grant DMV or Query Store access. It should use reviewed read-only queries and the minimum permissions required; `sysadmin` must not be a prerequisite.
 
-## Actors
+## Support escalation
 
-| Actor | Allowed MVP behavior |
-|---|---|
-| Viewer | Read status and redacted troubleshooting/capacity results |
-| Operator | Request lifecycle actions and prepare schedules |
-| Approver | Approve bounded lifecycle actions within policy |
-| Support requester | Approve creation of a reviewed support ticket |
-| Platform administrator | Configure identities, allowlists, policies, budgets, and integrations |
-| Scheduler | Trigger only pre-approved schedules within their validity window |
+The MVP creates a redacted draft only. It never implies that all Microsoft Support plans permit REST API creation. A future submission adapter must check plan/tenant entitlement, provider registration, authorization, severity rules, duplicate requests, and exact payload approval.
 
-One person may hold multiple roles, but production policy should support separation of duties for high-impact environments.
+## Cost boundary
 
-## Functional scenarios
+Repository code and public skills can be free/open source. Copilot/model access, MI compute/storage, Azure monitoring, data retention, network use, and Microsoft Support can incur costs. Pricing and entitlement are outside repository validation.
 
-### 1. Get status
+## Acceptance criteria
 
-**Given** an allowlisted MI, **when** an authorized user asks for status, **then** the agent returns observed state, evidence timestamp, relevant pending operation, and data source.
+Locally validated:
 
-### 2. Start an MI
+- Invalid or non-allowlisted configuration is rejected.
+- Allowlisting is exact and case-insensitive.
+- Mutations default to dry-run.
+- Wrong or absent explicit confirmation is rejected.
+- Operation state survives process exit through JSON persistence.
+- sensitive keys and bearer tokens are redacted.
 
-**Given** an allowlisted, eligible, stopped MI and valid authorization, **when** the user approves start, **then** the agent persists the request before submission, invokes the typed lifecycle operation once, reconciles the long-running operation, and reports independently verified state.
+Requires tenant/MI validation:
 
-### 3. Stop an MI
-
-**Given** an allowlisted, eligible, running MI and valid authorization, **when** the user approves stop, **then** the agent warns about expected impact, records approval, executes once, tracks completion, and verifies stopped state.
-
-### 4. Scheduled lifecycle action
-
-**Given** a pre-approved schedule with resource, action, timezone, validity window, and budget, **when** a trigger fires, **then** the agent rechecks policy, eligibility, state, and conflicts before executing. Missed or ambiguous windows do not cause an unbounded catch-up action.
-
-### 5. Troubleshoot degraded performance
-
-**Given** a resource and incident window, **when** diagnostics are requested, **then** the agent collects only approved read-only evidence, labels unavailable SQL evidence explicitly, correlates sources, and returns ranked hypotheses without remediation side effects.
-
-### 6. Recommend capacity
-
-**Given** sufficient historical evidence, **when** a capacity review is requested, **then** the agent returns observations, assumptions, confidence, candidate configuration, expected benefit, tradeoffs, cost-data caveats, and post-change measurements. It does not resize.
-
-### 7. Draft and create a support request
-
-**Given** unresolved impact, **when** escalation is requested, **then** the agent drafts a redacted payload. It creates the ticket only after prerequisite checks and explicit authorization of the displayed payload.
-
-## Cross-cutting acceptance criteria
-
-Every mutable workflow must:
-
-- Reject targets outside the allowlist.
-- Bind approval to the exact resource, action, parameters, and expiration.
-- Persist intent and idempotency key before invoking Azure.
-- Record the Azure operation/request reference.
-- Prevent duplicate execution.
-- Enforce per-resource operation serialization.
-- Respect action and spend budgets.
-- Produce an audit record without secrets.
-- Verify final state independently.
-- Report failures and unknown states explicitly.
-
-Every evidence workflow must:
-
-- State source and collection time.
-- Distinguish observed facts from inference.
-- Mark missing data and permission failures.
-- Apply data minimization and redaction.
-- Avoid presenting stale evidence as current.
-- Avoid claiming tenant validation.
-
-## Non-functional targets for an implementation
-
-These are initial engineering targets, not measured results:
-
-| Area | Proposed target |
-|---|---|
-| Duplicate side effects | Zero in retry/replay tests |
-| Operation recovery | Resume reconciliation after process restart |
-| Audit coverage | 100% of policy decisions and mutable action transitions |
-| Approval binding | Exact action/resource/parameters with expiration |
-| Redaction | Automated rules plus human preview for support payloads |
-| Observability | Correlation ID across trigger, policy, executor, Azure, and audit |
-| Availability | Defined by chosen hosting path and documented separately |
-
-## Delivery increments
-
-1. Read-only status and policy/evidence envelopes.
-2. Durable operation journal and simulated lifecycle executor.
-3. Approved start/stop against an eligible non-production MI.
-4. Scheduling with budgets and missed-window behavior.
-5. Read-only troubleshooting with separate Azure and SQL identities.
-6. Capacity recommendation artifact.
-7. Support draft, prerequisite checks, and authorized creation.
-8. Platform comparison validation and production-readiness review.
+- Login and provider results in the target tenant.
+- MI read and lifecycle permissions.
+- Stop/start eligibility for the chosen MI.
+- Azure CLI response shape and lifecycle timing.
+- Schedule availability.
+- Resource Health, Activity Log, and metric access/retention.
+- Any future SQL or Support API adapter.

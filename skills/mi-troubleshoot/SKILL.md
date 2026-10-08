@@ -1,85 +1,28 @@
 ---
 name: mi-troubleshoot
-description: Perform bounded read-only troubleshooting for Azure SQL Managed Instance incidents.
+description: Collect and interpret read-only Azure control-plane, Activity Log, Resource Health, and Monitor evidence for one allowlisted Managed Instance.
 metadata:
-  status: proposed
+  status: implemented-evidence-not-tenant-validated
 ---
 
-# Skill: MI Troubleshoot
+# MI Troubleshoot
 
-> **Status:** Proposed specification. Not implemented or tenant validated. All tool activity is read-only.
+Run:
 
-## Purpose
+```powershell
+pwsh .\miops.ps1 preflight
+pwsh .\miops.ps1 status
+pwsh .\miops.ps1 evidence -LookbackHours 24
+```
 
-Investigate Azure SQL Managed Instance availability or performance symptoms by collecting bounded Azure and SQL evidence and producing ranked, evidence-linked hypotheses.
+Use another window only between 1 and 168 hours. Build a UTC timeline from the returned bundle. For each hypothesis provide supporting evidence, contradicting evidence, missing evidence, confidence, and a safe next diagnostic step.
 
-## Allowed outcomes
+This skill is read-only. Do not start/stop the MI, resize, modify configuration, execute T-SQL, kill sessions, or claim resolution.
 
-- Establish incident scope and timeline.
-- Collect approved Azure configuration, activity, health, metric, and alert evidence.
-- Execute reviewed read-only SQL diagnostic templates when separately authorized.
-- Correlate evidence and identify likely causes or next diagnostic steps.
-- Recommend reversible operator actions or escalation.
+SQL DMVs and Query Store are an optional future adapter. Check the boundary with:
 
-## Prohibited outcomes
+```powershell
+pwsh .\miops.ps1 sql-adapter-status
+```
 
-- Execute arbitrary SQL.
-- Modify data, schema, configuration, sessions, jobs, or indexes.
-- Start, stop, resize, fail over, or otherwise remediate the MI.
-- Claim root cause without supporting evidence.
-- Treat unavailable DMV access as evidence that the database is healthy.
-
-## Required inputs
-
-- Canonical allowlisted MI resource ID.
-- Symptom and user-visible impact.
-- Incident start/end or investigation window.
-- Correlation/request ID.
-- Optional database scope, sanitized identifiers, and known changes.
-
-## Evidence collection order
-
-1. Confirm resource identity and current Azure state.
-2. Read recent resource configuration changes and Azure Activity Log.
-3. Read Resource Health and relevant service/maintenance context.
-4. Read supported Azure Monitor metrics for the incident and baseline windows.
-5. Read alert history and configured thresholds when available.
-6. If SQL access is configured, run only applicable reviewed query templates.
-7. Normalize timestamps and compare incident evidence with baseline.
-
-## SQL access boundary
-
-Azure RBAC does not provide SQL DMV access. The SQL collector must authenticate separately and:
-
-- Use a dedicated least-privilege principal.
-- Execute only versioned template IDs.
-- Parameterize database/time filters.
-- Enforce timeout and row limits.
-- Reject DDL, DML, dynamic arbitrary SQL, and multi-statement input.
-- Redact sensitive columns before results reach the model.
-
-## Diagnostic method
-
-For each hypothesis, return:
-
-- Statement of the hypothesis.
-- Supporting evidence and source timestamps.
-- Contradicting evidence.
-- Missing evidence.
-- Confidence level.
-- Safe next validation step.
-
-Examples of hypothesis categories include control-plane operation, service health, resource saturation, blocking/concurrency, query regression, storage pressure, connectivity, authentication, or insufficient evidence. Category presence does not imply a finding.
-
-## Output
-
-- Incident summary and evidence window.
-- Current observed state.
-- Timeline of material events.
-- Ranked hypotheses with confidence.
-- Confirmed facts versus inference.
-- Evidence gaps and permission limitations.
-- Recommended next steps.
-- Escalation package inputs when unresolved.
-
-Never say an incident is resolved based only on metric recovery; resolution confirmation belongs to the operator or monitoring process.
+Never fabricate SQL evidence or treat its absence as proof of health. Explicitly report access, retention, provider, unsupported-configuration, and metric gaps.

@@ -1,56 +1,121 @@
-# Azure SQL Managed Instance Operations Agent
+# Azure SQL Managed Instance Operations MVP
 
-Design workspace for an Azure SQL Managed Instance (MI) operations agent MVP.
+Executable phase-1 operations toolkit for **one allowlisted existing Azure SQL Managed Instance (MI)**. The chosen runtime is local GitHub Copilot CLI, public/open-source skill definitions, PowerShell 7, and Azure CLI/ARM.
 
-> **Status:** Proposed design only. The repository currently contains architecture, governance, and skill specifications. It does not contain a deployed agent, production automation, or tenant-validated capabilities.
+> **Validation status:** The PowerShell safety, configuration, persistence, and redaction logic is implemented and locally tested. Azure commands have not been executed against a tenant or MI by this repository. Run preflight and approved non-production validation before operational use.
 
-## MVP outcome
+Azure SRE Agent is not an MVP dependency or prerequisite. It is only a possible future migration target.
 
-The MVP assists operators with controlled operations for **existing** Azure SQL Managed Instances:
+## Implemented phase-1 capabilities
 
-- Query MI state and initiate start or stop operations through Azure CLI/ARM.
-- Run approved start/stop schedules with durable operation tracking.
-- Collect read-only Azure and SQL evidence for automated troubleshooting.
-- Produce evidence-based capacity and resize recommendations without automatically resizing.
-- Draft Azure Support requests and create them only after explicit authorization and prerequisite checks.
+- Validate local configuration, Azure CLI login, active subscription, provider registration, and observable MI read access.
+- Show MI state and conservative local lifecycle eligibility.
+- Submit controlled `start` and `stop` operations through `az sql mi --no-wait`.
+- Default every mutation to dry-run; require `-Apply` plus the exact allowlisted resource ID.
+- Persist local operation state and later poll the MI until the desired state is independently observed.
+- Inspect an Azure-native start/stop schedule, create a review plan, and explicitly delete an existing schedule.
+- Collect read-only Azure Resource Manager, Activity Log, Resource Health, and Azure Monitor evidence.
+- Generate a redacted Microsoft Support case draft/evidence summary.
+- Record redacted local JSONL audit events.
+- Expose SQL DMV/Query Store diagnostics as a disabled optional adapter boundary.
 
-The MVP is not a general autonomous database administrator. It does not provision or delete instances, apply SQL changes, automatically resize compute/storage, or make unapproved support or lifecycle changes.
+Phase 1 does **not** automatically resize, create/update automatic stop schedules, execute SQL diagnostics, remediate incidents, or submit Microsoft Support cases.
 
-## Important constraints
+## Cost statement
 
-- Azure SQL MCP does not currently expose MI lifecycle management. Lifecycle actions therefore use `az sql mi` and/or Azure Resource Manager (ARM) APIs.
-- Stop/start is available only for eligible instances and configurations. Eligibility must be checked at runtime; a requested action must not be assumed to be supported.
-- Start and resize operations are long-running. The control plane must persist the Azure operation identifier and reconcile operation state across process restarts.
-- Azure RBAC permissions do not grant access to SQL dynamic management views (DMVs). SQL troubleshooting requires separate database authentication and least-privilege SQL permissions.
-- Azure Support API access depends on an eligible support plan, API entitlement, provider registration, and appropriate authorization. The agent must check prerequisites before offering ticket creation.
-- Every mutable action is constrained by resource allowlists, least privilege, explicit approvals, audit records, deduplication, redaction, budgets, and post-action verification.
+The skill definitions and repository code are free/open source. The complete solution is **not universally zero-cost**: GitHub Copilot/model access, Azure SQL MI and other Azure resources, Azure Monitor/Log Analytics retention or queries, storage, networking, and Microsoft Support plans can incur charges. Confirm licensing, subscription pricing, quotas, and support entitlement for your environment.
 
-## Workspace map
+## Prerequisites
 
-| Path | Purpose | Status |
-|---|---|---|
-| [`docs/architecture.md`](docs/architecture.md) | Components, flows, state model, and deployment paths | Proposed |
-| [`docs/mvp-scope.md`](docs/mvp-scope.md) | MVP boundaries, scenarios, and acceptance criteria | Proposed |
-| [`docs/security-and-governance.md`](docs/security-and-governance.md) | Authorization, approvals, audit, data handling, and safety controls | Proposed |
-| [`docs/decision-log/0001-platform-strategy.md`](docs/decision-log/0001-platform-strategy.md) | Self-hosted `microsoft/azure-skills` versus Azure SRE Agent strategy | Proposed decision |
-| [`skills/mi-manage/SKILL.md`](skills/mi-manage/SKILL.md) | Status, start, stop, and scheduling contract | Proposed skill |
-| [`skills/mi-capacity/SKILL.md`](skills/mi-capacity/SKILL.md) | Capacity evidence and resize recommendations | Proposed skill |
-| [`skills/mi-troubleshoot/SKILL.md`](skills/mi-troubleshoot/SKILL.md) | Read-only incident investigation | Proposed skill |
-| [`skills/mi-escalate/SKILL.md`](skills/mi-escalate/SKILL.md) | Support request drafting and authorized creation | Proposed skill |
+- PowerShell 7.4 or later.
+- Azure CLI 2.89 or later.
+- `az login` access to the configured subscription.
+- Azure read permissions for status/evidence and separate lifecycle permissions for approved start/stop.
+- An existing MI that is eligible for the requested Azure feature.
 
-## Platform paths
+Azure RBAC does not grant SQL DMV or Query Store access. SQL diagnostics require a separate least-privilege SQL identity and adapter; `sysadmin` is neither required nor recommended.
 
-The design keeps domain skills portable between two execution paths:
+## Quickstart
 
-1. **Self-hosted agent using free `microsoft/azure-skills` building blocks** for maximum control over hosting, identity, state, approvals, and integrations.
-2. **Azure SRE Agent** for a managed reliability-agent experience, subject to product availability, supported integrations, governance fit, and tenant validation.
+```powershell
+pwsh .\bootstrap.ps1
+# Edit resource.id and resource.allowedResourceIds to the same existing MI resource ID.
 
-The proposed MVP starts with a self-hosted reference implementation while preserving skill boundaries that can be adapted to Azure SRE Agent. See [decision 0001](docs/decision-log/0001-platform-strategy.md).
+pwsh .\miops.ps1 preflight
+pwsh .\miops.ps1 status
+pwsh .\miops.ps1 evidence -LookbackHours 24
+```
 
-## Capability legend
+Start and stop are dry-run by default:
 
-- **Proposed:** documented design; not implemented in this repository.
-- **Implemented:** code exists and has repository-level tests.
-- **Tenant validated:** exercised with approved identities and representative resources in a real Azure tenant.
+```powershell
+pwsh .\miops.ps1 start
 
-All current capabilities are **Proposed**. Nothing in this repository should be interpreted as tenant validation or operational readiness.
+$mi = '/subscriptions/<subscription>/resourceGroups/<rg>/providers/Microsoft.Sql/managedInstances/<mi>'
+pwsh .\miops.ps1 start -Apply -ApproveResourceId $mi
+pwsh .\miops.ps1 operation-poll -OperationId '<local-operation-id>'
+```
+
+Schedule and escalation examples:
+
+```powershell
+pwsh .\miops.ps1 schedule-show
+pwsh .\miops.ps1 schedule-plan
+pwsh .\miops.ps1 schedule-delete
+# Applying deletion requires the same -Apply -ApproveResourceId safeguard.
+
+pwsh .\miops.ps1 support-draft `
+  -EvidencePath '.miops\evidence\evidence-<timestamp>.json' `
+  -Title 'MI connectivity degradation' `
+  -Impact 'Applications experienced elevated connection failures.'
+```
+
+Use another config with `-ConfigPath`. Local configuration and runtime state are ignored by Git:
+
+```powershell
+pwsh .\miops.ps1 status -ConfigPath 'C:\secure-config\miops.json'
+```
+
+## Command reference
+
+| Command | Boundary |
+|---|---|
+| `preflight` | Read-only checks; cannot prove all write permissions or feature eligibility |
+| `status` | Read-only MI state |
+| `start`, `stop` | Dry-run unless exact explicit approval is provided |
+| `operation-poll` | Read-only reconciliation of a persisted operation |
+| `schedule-show` | Read-only inspection |
+| `schedule-plan` | Local plan only; does not enable automation |
+| `schedule-delete` | Dry-run by default; applying only disables an existing Azure schedule |
+| `evidence` | Read-only Azure evidence bundle |
+| `support-draft` | Local redacted draft only; no API submission |
+| `sql-adapter-status` | Reports optional adapter boundary; no SQL query execution |
+
+## Local data
+
+By default `.miops/` contains:
+
+- `operations/*.json`: durable local lifecycle records.
+- `evidence/*.json`: redacted Azure evidence bundles.
+- `support/*.json`: redacted Support case drafts.
+- `audit.jsonl`: append-only local audit events.
+
+Local files are not an immutable enterprise audit sink. Protect the workstation and move records to an approved backend before production use.
+
+## Tests
+
+```powershell
+pwsh -NoProfile -File .\tests\run-tests.ps1
+```
+
+Tests do not require Azure. They cover configuration validation, exact allowlisting, dry-run/approval safeguards, operation persistence, and redaction.
+
+## Documentation
+
+- [Architecture](docs/architecture.md)
+- [MVP scope and limitations](docs/mvp-scope.md)
+- [Security and governance](docs/security-and-governance.md)
+- [Platform decision](docs/decision-log/0001-platform-strategy.md)
+- [Optional SQL diagnostics adapter contract](adapters/sql/README.md)
+
+The four [`skills/`](skills) definitions give Copilot CLI exact command guidance while preserving read-only and mutating boundaries.
