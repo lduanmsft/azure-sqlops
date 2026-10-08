@@ -1,0 +1,44 @@
+# Operating systems and editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.pfx
+*.key
+secrets/
+
+# Language and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+dist/
+build/
+coverage/
+.coverage
+
+# Infrastructure and Azure local state
+.terraform/
+*.tfstate
+*.tfstate.*
+.azure/
+
+# Agent runtime data
+.agent-state/
+.miops/
+logs/
+artifacts/
+tmp/
+temp/
+
+# Local MI operations configuration
+config/miops.local.json
