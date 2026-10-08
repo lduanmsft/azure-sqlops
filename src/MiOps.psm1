@@ -201,6 +201,29 @@ function Test-MiOpsSubscriptionId {
     return $SubscriptionId.Trim() -match '^(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 }
 
+function Get-MiOpsPropertyValue {
+    [CmdletBinding()]
+    param(
+        $InputObject,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    if ($null -eq $InputObject) {
+        return $null
+    }
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        if ($InputObject.Contains($Name)) {
+            return $InputObject[$Name]
+        }
+        return $null
+    }
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($property) {
+        return $property.Value
+    }
+    return $null
+}
+
 function Select-MiOpsNumberedItem {
     [CmdletBinding()]
     param(
@@ -269,14 +292,29 @@ function Invoke-MiOpsAzLogin {
     if ($UseDeviceCode) {
         $arguments += '--use-device-code'
     }
-    if ($UseDeviceCode) {
-        & $az.Source @arguments
-    }
-    else {
-        $null = @(& $az.Source @arguments 2>&1)
-    }
+
+    $loginOutput = @(& $az.Source @arguments 2>&1 | ForEach-Object {
+        Write-Host ([string]$_)
+        $_
+    })
     if ($LASTEXITCODE -ne 0) {
-        throw 'Azure CLI interactive login failed. Login output was not written to configuration or miops logs.'
+        $detail = ConvertTo-MiOpsRedactedObject -InputObject (($loginOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+        if ([string]::IsNullOrWhiteSpace($detail)) {
+            $detail = 'Azure CLI returned no additional error text.'
+        }
+        throw "Azure CLI interactive login failed. $detail Conditional Access and device-compliance requirements cannot be bypassed by changing login mode; use an organization-approved managed device or contact the tenant administrator."
+    }
+
+    try {
+        $account = Invoke-MiOpsAzJson -Arguments @('account', 'show')
+        $subscriptions = @(Invoke-MiOpsAzJson -Arguments @('account', 'list', '--all'))
+    }
+    catch {
+        throw "Azure CLI login completed, but the signed-in account context could not be read: $($_.Exception.Message)"
+    }
+    return [pscustomobject]@{
+        account = $account
+        subscriptions = $subscriptions
     }
 }
 
@@ -284,17 +322,19 @@ function ConvertTo-MiOpsTenantChoices {
     [CmdletBinding()]
     param([Parameter(Mandatory)][object[]]$Subscriptions)
 
-    return @($Subscriptions |
-        Group-Object tenantId |
-        ForEach-Object {
-            $account = $_.Group | Select-Object -First 1
-            [pscustomobject]@{
-                tenantId = [string]$account.tenantId
-                defaultDomain = [string]$account.tenantDefaultDomain
-                displayName = [string]$account.tenantDisplayName
-            }
-        } |
-        Sort-Object defaultDomain, tenantId)
+    $choices = [ordered]@{}
+    foreach ($subscription in $Subscriptions) {
+        $tenantId = [string](Get-MiOpsPropertyValue -InputObject $subscription -Name 'tenantId')
+        if ([string]::IsNullOrWhiteSpace($tenantId) -or $choices.Contains($tenantId)) {
+            continue
+        }
+        $choices[$tenantId] = [pscustomobject]@{
+            tenantId = $tenantId
+            defaultDomain = [string](Get-MiOpsPropertyValue -InputObject $subscription -Name 'tenantDefaultDomain')
+            displayName = [string](Get-MiOpsPropertyValue -InputObject $subscription -Name 'tenantDisplayName')
+        }
+    }
+    return @($choices.Values | Sort-Object defaultDomain, tenantId)
 }
 
 function Get-MiOpsTenants {
@@ -306,18 +346,29 @@ function Get-MiOpsTenants {
 
 function Resolve-MiOpsTenant {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$TenantId)
+    param(
+        [Parameter(Mandatory)][string]$TenantId,
+        [object[]]$Tenants
+    )
 
     if (-not (Test-MiOpsTenantId -TenantId $TenantId)) {
         throw 'TenantId must be a tenant domain name or GUID.'
     }
-    $tenants = @(Get-MiOpsTenants)
-    $match = @($tenants | Where-Object {
-        ([string]$_.tenantId -ieq $TenantId) -or
-        ([string]$_.defaultDomain -ieq $TenantId)
+    if (-not $PSBoundParameters.ContainsKey('Tenants')) {
+        $Tenants = @(Get-MiOpsTenants)
+    }
+    $match = @($Tenants | Where-Object {
+        ([string](Get-MiOpsPropertyValue -InputObject $_ -Name 'tenantId') -ieq $TenantId) -or
+        ([string](Get-MiOpsPropertyValue -InputObject $_ -Name 'defaultDomain') -ieq $TenantId)
     })
     if ($match.Count -ne 1) {
-        throw "Azure CLI could not resolve tenant '$TenantId' to exactly one signed-in tenant."
+        $available = @($Tenants | ForEach-Object {
+            $guid = [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'tenantId')
+            $domain = [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'defaultDomain')
+            if ($domain) { "$domain ($guid)" } else { $guid }
+        } | Where-Object { $_ })
+        $availableText = if ($available.Count -gt 0) { $available -join ', ' } else { 'none' }
+        throw "Azure CLI could not resolve tenant domain '$TenantId' from optional account metadata. Available tenant GUIDs/domains: $availableText. Retry with the tenant GUID shown, or verify access with your tenant administrator."
     }
     return $match[0]
 }
@@ -329,8 +380,8 @@ function Get-MiOpsEnabledSubscriptions {
     $subscriptions = @(Invoke-MiOpsAzJson -Arguments @('account', 'list', '--all'))
     return @($subscriptions |
         Where-Object {
-            [string]$_.state -eq 'Enabled' -and
-            (-not $TenantGuid -or [string]$_.tenantId -ieq $TenantGuid)
+            [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'state') -eq 'Enabled' -and
+            (-not $TenantGuid -or [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'tenantId') -ieq $TenantGuid)
         } |
         Sort-Object name, id)
 }
@@ -1068,6 +1119,7 @@ Export-ModuleMember -Function @(
     'Test-MiOpsResourceAllowed',
     'Test-MiOpsTenantId',
     'Test-MiOpsSubscriptionId',
+    'Get-MiOpsPropertyValue',
     'Select-MiOpsNumberedItem',
     'Test-MiOpsTypedConfirmation',
     'Invoke-MiOpsAzLogin',

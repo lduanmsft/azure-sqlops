@@ -58,6 +58,8 @@ pwsh .\miops.ps1 evidence -LookbackHours 24
 
 `fdpo.onmicrosoft.com` is an example tenant domain only. Azure CLI performs authentication and the operator completes it locally in the browser or device-code flow. The toolkit never accepts or stores passwords, tokens, or client secrets. Subscription IDs are resource identifiers, not credentials.
 
+Browser and device-code login are authentication interfaces, not Conditional Access bypasses. If the tenant requires device compliance or another organization policy, use an organization-approved managed device or contact the tenant administrator.
+
 For automation or repeatable setup, provide known identifiers while retaining exact selection approval:
 
 ```powershell
