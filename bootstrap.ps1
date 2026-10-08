@@ -29,5 +29,7 @@ else {
     Write-Host "Created local configuration: $destination"
 }
 
-Write-Host 'Next: replace the placeholder resource ID, run az login, then execute:'
+Write-Host 'For guided Azure login, subscription/MI selection, and exact allowlist setup, run:'
+Write-Host '  pwsh ./miops.ps1 setup'
+Write-Host 'For manual configuration, replace the placeholder resource ID, run az login, then execute:'
 Write-Host '  pwsh ./miops.ps1 preflight'

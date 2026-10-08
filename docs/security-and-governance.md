@@ -21,7 +21,7 @@ These controls supplement rather than replace Azure RBAC, policy, locks, and ope
 
 Use a dedicated operator identity with the narrowest practical scope. Read-only evidence requires Azure resource and monitoring permissions. Start/stop and schedule deletion require additional control-plane actions. Preflight proves only what it can observe; lifecycle write permission is conclusively tested only by an approved operation.
 
-Do not store Azure tokens, client secrets, connection strings, or credentials in config. Use `az login`, managed identity, workload identity, or another Azure CLI-supported secure login appropriate to the environment.
+`miops.ps1 setup` uses Azure CLI interactive browser login or explicit device-code login for a tenant domain/GUID. The operator completes authentication locally. Do not store Azure tokens, client secrets, connection strings, passwords, or other credentials in config. Subscription IDs and tenant IDs are identifiers, not credentials. The ignored local config may retain those identifiers as onboarding metadata.
 
 ## SQL authorization
 
@@ -38,6 +38,8 @@ Mutating commands reject:
 - Missing `-Apply`.
 - Missing or non-exact `-ApproveResourceId`.
 - Locally unsupported lifecycle tier/configuration.
+
+The interactive menu additionally requires a case-sensitive `START <mi-name>` or `STOP <mi-name>` phrase after showing the exact name, resource ID, and observed state. Selecting a menu number never adds `-Apply`.
 
 ## Audit and state
 
