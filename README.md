@@ -9,6 +9,8 @@ Azure SRE Agent is not an MVP dependency or prerequisite. It is only a possible 
 ## Implemented phase-1 capabilities
 
 - Validate local configuration, Azure CLI login, active subscription, provider registration, and observable MI read access.
+- Interactively sign in to a tenant, choose an enabled subscription, discover MIs, and write one exact ignored local allowlist.
+- Offer a safe interactive operations menu that reuses the same deterministic functions as direct commands.
 - Show MI state and conservative local lifecycle eligibility.
 - Submit controlled `start` and `stop` operations through `az sql mi --no-wait`.
 - Default every mutation to dry-run; require `-Apply` plus the exact allowlisted resource ID.
@@ -38,12 +40,32 @@ Azure RBAC does not grant SQL DMV or Query Store access. SQL diagnostics require
 ## Quickstart
 
 ```powershell
-pwsh .\bootstrap.ps1
-# Edit resource.id and resource.allowedResourceIds to the same existing MI resource ID.
+# Browser-based Azure CLI login, subscription selection, and MI discovery:
+pwsh .\miops.ps1 setup -TenantId 'fdpo.onmicrosoft.com'
+
+# Omit -TenantId to choose from the tenants returned by Azure CLI:
+pwsh .\miops.ps1 setup
+
+# Use this instead when browser launch is unavailable:
+pwsh .\miops.ps1 setup -TenantId '<tenant-domain-or-guid>' -UseDeviceCode
+
+pwsh .\miops.ps1 interactive
 
 pwsh .\miops.ps1 preflight
 pwsh .\miops.ps1 status
 pwsh .\miops.ps1 evidence -LookbackHours 24
+```
+
+`fdpo.onmicrosoft.com` is an example tenant domain only. Azure CLI performs authentication and the operator completes it locally in the browser or device-code flow. The toolkit never accepts or stores passwords, tokens, or client secrets. Subscription IDs are resource identifiers, not credentials.
+
+For automation or repeatable setup, provide known identifiers while retaining exact selection approval:
+
+```powershell
+pwsh .\miops.ps1 setup `
+  -TenantId '<tenant-guid>' `
+  -SubscriptionId '<subscription-guid>' `
+  -ManagedInstanceId '/subscriptions/<subscription-guid>/resourceGroups/<rg>/providers/Microsoft.Sql/managedInstances/<mi>' `
+  -ApproveManagedInstanceId '/subscriptions/<subscription-guid>/resourceGroups/<rg>/providers/Microsoft.Sql/managedInstances/<mi>'
 ```
 
 Start and stop are dry-run by default:
@@ -80,6 +102,8 @@ pwsh .\miops.ps1 status -ConfigPath 'C:\secure-config\miops.json'
 
 | Command | Boundary |
 |---|---|
+| `setup` | Azure CLI interactive login, enabled subscription selection, MI discovery, and exact local allowlist generation |
+| `interactive` | Menu for supported read-only, dry-run, explicitly confirmed lifecycle, polling, and support-draft guidance |
 | `preflight` | Read-only checks; cannot prove all write permissions or feature eligibility |
 | `status` | Read-only MI state |
 | `start`, `stop` | Dry-run unless exact explicit approval is provided |

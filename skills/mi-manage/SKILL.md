@@ -9,6 +9,44 @@ metadata:
 
 Use repository-root commands only. The runtime is local Copilot CLI + PowerShell 7 + Azure CLI; Azure SRE Agent is not required.
 
+## Tenant onboarding
+
+Use Azure CLI interactive authentication through the setup command:
+
+```powershell
+# Browser login:
+pwsh .\miops.ps1 setup -TenantId 'fdpo.onmicrosoft.com'
+
+# Browser login followed by a numbered tenant menu:
+pwsh .\miops.ps1 setup
+
+# Device-code login when a browser cannot be opened:
+pwsh .\miops.ps1 setup -TenantId '<tenant-domain-or-guid>' -UseDeviceCode
+```
+
+`fdpo.onmicrosoft.com` is an example only. The operator completes authentication locally using Azure CLI. Never request, accept, echo, or store passwords, access tokens, refresh tokens, or client secrets. Subscription IDs are identifiers, not credentials.
+
+If `-TenantId` is omitted, setup presents the tenants returned by Azure CLI as a numbered menu. If `-SubscriptionId` is omitted, setup lists accessible enabled subscriptions in the chosen tenant and asks for a numbered selection. It then confirms the active tenant/subscription, discovers all MIs with `az sql mi list --subscription ...`, shows name, resource group, location, state, tier, and full resource ID, and requires `CONFIGURE <mi-name>` before writing ignored `config/miops.local.json`.
+
+Known identifiers can be supplied for repeatable setup, but exact MI approval remains mandatory:
+
+```powershell
+$mi = '/subscriptions/<subscription-guid>/resourceGroups/<rg>/providers/Microsoft.Sql/managedInstances/<mi>'
+pwsh .\miops.ps1 setup `
+  -TenantId '<tenant-guid>' `
+  -SubscriptionId '<subscription-guid>' `
+  -ManagedInstanceId $mi `
+  -ApproveManagedInstanceId $mi
+```
+
+After setup:
+
+```powershell
+pwsh .\miops.ps1 interactive
+```
+
+The interactive menu supports status, evidence, start/stop dry-runs, explicitly confirmed start/stop apply, schedule inspection, operation polling, and local support-draft guidance. Apply requires typing `START <mi-name>` or `STOP <mi-name>` after the exact resource, name, and current state are shown. A menu number alone never authorizes a mutation.
+
 ## Read-only commands
 
 ```powershell

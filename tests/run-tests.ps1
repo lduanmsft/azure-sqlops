@@ -110,6 +110,76 @@ try {
         Assert-True (-not (Test-MiOpsResourceAllowed -Config $baseConfig -ResourceId "$resourceId-extra")) 'Prefix resource incorrectly matched allowlist.'
     }
 
+    Test-Case 'tenant and subscription identifiers are validated' {
+        Assert-True (Test-MiOpsTenantId -TenantId 'fdpo.onmicrosoft.com') 'Tenant domain was rejected.'
+        Assert-True (Test-MiOpsTenantId -TenantId '11111111-1111-1111-1111-111111111111') 'Tenant GUID was rejected.'
+        Assert-True (-not (Test-MiOpsTenantId -TenantId 'not a tenant')) 'Invalid tenant was accepted.'
+        Assert-True (Test-MiOpsSubscriptionId -SubscriptionId '22222222-2222-2222-2222-222222222222') 'Subscription GUID was rejected.'
+        Assert-True (-not (Test-MiOpsSubscriptionId -SubscriptionId 'production-subscription')) 'Subscription name was accepted as an ID.'
+    }
+
+    Test-Case 'tenant choices use core account subscription metadata' {
+        $subscriptions = @(
+            [pscustomobject]@{
+                id = '22222222-2222-2222-2222-222222222222'
+                tenantId = '11111111-1111-1111-1111-111111111111'
+                tenantDefaultDomain = 'fdpo.onmicrosoft.com'
+                tenantDisplayName = 'Example tenant'
+            },
+            [pscustomobject]@{
+                id = '33333333-3333-3333-3333-333333333333'
+                tenantId = '11111111-1111-1111-1111-111111111111'
+                tenantDefaultDomain = 'fdpo.onmicrosoft.com'
+                tenantDisplayName = 'Example tenant'
+            }
+        )
+        $tenants = @(ConvertTo-MiOpsTenantChoices -Subscriptions $subscriptions)
+        Assert-True ($tenants.Count -eq 1) 'Subscriptions from one tenant produced duplicate tenant choices.'
+        Assert-True ($tenants[0].defaultDomain -eq 'fdpo.onmicrosoft.com') 'Tenant domain metadata was not preserved.'
+    }
+
+    Test-Case 'numbered selection validates bounds and supports cancellation' {
+        $items = @(
+            [pscustomobject]@{ name = 'first' },
+            [pscustomobject]@{ name = 'second' }
+        )
+        Assert-True ((Select-MiOpsNumberedItem -Items $items -Selection '2').name -eq 'second') 'Numbered selection chose the wrong item.'
+        Assert-True ($null -eq (Select-MiOpsNumberedItem -Items $items -Selection '0')) 'Cancellation did not return null.'
+        Assert-Throws { Select-MiOpsNumberedItem -Items $items -Selection '3' } 'Out-of-range selection was accepted.'
+        Assert-Throws { Select-MiOpsNumberedItem -Items $items -Selection 'one' } 'Non-numeric selection was accepted.'
+    }
+
+    Test-Case 'Managed Instance selection preserves the discovered resource' {
+        $instances = @(
+            [pscustomobject]@{ name = 'mi-one'; id = "$resourceId-one" },
+            [pscustomobject]@{ name = 'mi-two'; id = $resourceId }
+        )
+        $selected = Select-MiOpsNumberedItem -Items $instances -Selection '2'
+        Assert-True ($selected.name -eq 'mi-two') 'Managed Instance name was not selected.'
+        Assert-True ($selected.id -eq $resourceId) 'Managed Instance resource ID changed during selection.'
+    }
+
+    Test-Case 'local config generation sets one exact allowlisted resource' {
+        $destination = Join-Path $tempRoot 'generated\miops.local.json'
+        $example = Join-Path $repositoryRoot 'config\miops.example.json'
+        $config = New-MiOpsLocalConfig -ExamplePath $example -DestinationPath $destination `
+            -ResourceId $resourceId -TenantId '11111111-1111-1111-1111-111111111111' `
+            -SubscriptionId '00000000-0000-0000-0000-000000000000'
+        Assert-True (Test-Path -LiteralPath $destination) 'Local config was not created.'
+        Assert-True ($config.resource.id -eq $resourceId) 'Generated resource.id is incorrect.'
+        Assert-True ($config.resource.allowedResourceIds.Count -eq 1) 'Generated allowlist must contain exactly one resource.'
+        Assert-True ($config.resource.allowedResourceIds[0] -eq $resourceId) 'Generated allowlist resource is incorrect.'
+        Assert-True ($config.onboarding.subscriptionId -eq '00000000-0000-0000-0000-000000000000') 'Subscription metadata was not stored.'
+        Assert-True ((Get-Content -LiteralPath $example -Raw) -notmatch 'test-mi') 'Checked-in example was modified.'
+    }
+
+    Test-Case 'typed mutation confirmation is action and MI specific' {
+        Assert-True (Test-MiOpsTypedConfirmation -Action START -ManagedInstanceName 'test-mi' -Confirmation 'START test-mi') 'Exact start confirmation was rejected.'
+        Assert-True (-not (Test-MiOpsTypedConfirmation -Action START -ManagedInstanceName 'test-mi' -Confirmation 'STOP test-mi')) 'Wrong action confirmation was accepted.'
+        Assert-True (-not (Test-MiOpsTypedConfirmation -Action STOP -ManagedInstanceName 'test-mi' -Confirmation 'STOP other-mi')) 'Wrong MI confirmation was accepted.'
+        Assert-True (-not (Test-MiOpsTypedConfirmation -Action STOP -ManagedInstanceName 'test-mi' -Confirmation 'stop test-mi')) 'Case-changed confirmation was accepted.'
+    }
+
     Test-Case 'mutation defaults to dry-run and exact approval is required' {
         $dryRun = Assert-MiOpsMutationApproval -Config $baseConfig -ResourceId $resourceId
         Assert-True (-not $dryRun) 'Mutation without Apply should be dry-run.'

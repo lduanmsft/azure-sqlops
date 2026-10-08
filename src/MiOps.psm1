@@ -186,6 +186,231 @@ function Write-MiOpsAudit {
     $record | ConvertTo-Json -Depth 20 -Compress | Add-Content -LiteralPath (Join-Path $Config.state.directory 'audit.jsonl') -Encoding utf8
 }
 
+function Test-MiOpsTenantId {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$TenantId)
+
+    $value = $TenantId.Trim()
+    return $value -match '^(?i)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)$'
+}
+
+function Test-MiOpsSubscriptionId {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$SubscriptionId)
+
+    return $SubscriptionId.Trim() -match '^(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+}
+
+function Select-MiOpsNumberedItem {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object[]]$Items,
+        [string]$Selection,
+        [string]$Prompt = 'Select an item'
+    )
+
+    if ($Items.Count -eq 0) {
+        throw 'No items are available for selection.'
+    }
+
+    $value = if ($PSBoundParameters.ContainsKey('Selection')) {
+        $Selection
+    }
+    else {
+        Read-Host "$Prompt (1-$($Items.Count), or 0 to cancel)"
+    }
+
+    $number = 0
+    if (-not [int]::TryParse(([string]$value).Trim(), [ref]$number)) {
+        throw "Selection must be a number from 1 to $($Items.Count), or 0 to cancel."
+    }
+    if ($number -eq 0) {
+        return $null
+    }
+    if ($number -lt 1 -or $number -gt $Items.Count) {
+        throw "Selection must be a number from 1 to $($Items.Count), or 0 to cancel."
+    }
+
+    return $Items[$number - 1]
+}
+
+function Test-MiOpsTypedConfirmation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateSet('CONFIGURE', 'START', 'STOP')][string]$Action,
+        [Parameter(Mandatory)][string]$ManagedInstanceName,
+        [Parameter(Mandatory)][string]$Confirmation
+    )
+
+    $expected = "$($Action.ToUpperInvariant()) $ManagedInstanceName"
+    return $Confirmation -ceq $expected
+}
+
+function Invoke-MiOpsAzLogin {
+    [CmdletBinding()]
+    param(
+        [string]$TenantId,
+        [switch]$UseDeviceCode
+    )
+
+    if ($TenantId -and -not (Test-MiOpsTenantId -TenantId $TenantId)) {
+        throw 'TenantId must be a tenant domain name or GUID.'
+    }
+    $az = Get-Command az -ErrorAction SilentlyContinue
+    if (-not $az) {
+        throw 'Azure CLI (az) is not installed or not on PATH.'
+    }
+
+    $arguments = @('login')
+    if ($TenantId) {
+        $arguments += @('--tenant', $TenantId)
+    }
+    $arguments += @('--only-show-errors', '--output', 'none')
+    if ($UseDeviceCode) {
+        $arguments += '--use-device-code'
+    }
+    if ($UseDeviceCode) {
+        & $az.Source @arguments
+    }
+    else {
+        $null = @(& $az.Source @arguments 2>&1)
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Azure CLI interactive login failed. Login output was not written to configuration or miops logs.'
+    }
+}
+
+function ConvertTo-MiOpsTenantChoices {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object[]]$Subscriptions)
+
+    return @($Subscriptions |
+        Group-Object tenantId |
+        ForEach-Object {
+            $account = $_.Group | Select-Object -First 1
+            [pscustomobject]@{
+                tenantId = [string]$account.tenantId
+                defaultDomain = [string]$account.tenantDefaultDomain
+                displayName = [string]$account.tenantDisplayName
+            }
+        } |
+        Sort-Object defaultDomain, tenantId)
+}
+
+function Get-MiOpsTenants {
+    [CmdletBinding()]
+    param()
+
+    return @(ConvertTo-MiOpsTenantChoices -Subscriptions @(Get-MiOpsEnabledSubscriptions))
+}
+
+function Resolve-MiOpsTenant {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$TenantId)
+
+    if (-not (Test-MiOpsTenantId -TenantId $TenantId)) {
+        throw 'TenantId must be a tenant domain name or GUID.'
+    }
+    $tenants = @(Get-MiOpsTenants)
+    $match = @($tenants | Where-Object {
+        ([string]$_.tenantId -ieq $TenantId) -or
+        ([string]$_.defaultDomain -ieq $TenantId)
+    })
+    if ($match.Count -ne 1) {
+        throw "Azure CLI could not resolve tenant '$TenantId' to exactly one signed-in tenant."
+    }
+    return $match[0]
+}
+
+function Get-MiOpsEnabledSubscriptions {
+    [CmdletBinding()]
+    param([string]$TenantGuid)
+
+    $subscriptions = @(Invoke-MiOpsAzJson -Arguments @('account', 'list', '--all'))
+    return @($subscriptions |
+        Where-Object {
+            [string]$_.state -eq 'Enabled' -and
+            (-not $TenantGuid -or [string]$_.tenantId -ieq $TenantGuid)
+        } |
+        Sort-Object name, id)
+}
+
+function Set-MiOpsSubscription {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$SubscriptionId,
+        [Parameter(Mandatory)][string]$TenantGuid
+    )
+
+    if (-not (Test-MiOpsSubscriptionId -SubscriptionId $SubscriptionId)) {
+        throw 'SubscriptionId must be a GUID.'
+    }
+    $null = Invoke-MiOpsAzJson -Arguments @('account', 'set', '--subscription', $SubscriptionId) -AllowEmpty
+    $account = Invoke-MiOpsAzJson -Arguments @('account', 'show')
+    if ([string]$account.id -ine $SubscriptionId -or [string]$account.tenantId -ine $TenantGuid) {
+        throw "Active Azure account does not match tenant '$TenantGuid' and subscription '$SubscriptionId'."
+    }
+    return $account
+}
+
+function Get-MiOpsManagedInstances {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$SubscriptionId)
+
+    if (-not (Test-MiOpsSubscriptionId -SubscriptionId $SubscriptionId)) {
+        throw 'SubscriptionId must be a GUID.'
+    }
+    try {
+        return @(Invoke-MiOpsAzJson -Arguments @('sql', 'mi', 'list', '--subscription', $SubscriptionId))
+    }
+    catch {
+        throw "Unable to enumerate Azure SQL Managed Instances in subscription '$SubscriptionId'. Verify Microsoft.Sql read permission. $($_.Exception.Message)"
+    }
+}
+
+function New-MiOpsLocalConfig {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ExamplePath,
+        [Parameter(Mandatory)][string]$DestinationPath,
+        [Parameter(Mandatory)][string]$ResourceId,
+        [Parameter(Mandatory)][string]$TenantId,
+        [Parameter(Mandatory)][string]$SubscriptionId
+    )
+
+    if (-not (Test-MiOpsTenantId -TenantId $TenantId)) {
+        throw 'TenantId must be a tenant domain name or GUID.'
+    }
+    if (-not (Test-MiOpsSubscriptionId -SubscriptionId $SubscriptionId)) {
+        throw 'SubscriptionId must be a GUID.'
+    }
+    if ($ResourceId -notmatch '^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Sql/managedInstances/[^/]+$') {
+        throw 'ResourceId must be a complete Azure SQL Managed Instance resource ID.'
+    }
+    $resourceSubscription = ([regex]::Match($ResourceId, '(?i)^/subscriptions/([^/]+)')).Groups[1].Value
+    if ($resourceSubscription -ine $SubscriptionId) {
+        throw 'The Managed Instance resource ID does not belong to the selected subscription.'
+    }
+    if (-not (Test-Path -LiteralPath $ExamplePath -PathType Leaf)) {
+        throw "Example configuration file not found: $ExamplePath"
+    }
+
+    $config = Get-Content -LiteralPath $ExamplePath -Raw | ConvertFrom-Json -AsHashtable -Depth 20
+    $config.resource.id = $ResourceId
+    $config.resource.allowedResourceIds = @($ResourceId)
+    $config.onboarding = [ordered]@{
+        tenantId = $TenantId
+        subscriptionId = $SubscriptionId
+        configuredAtUtc = [DateTime]::UtcNow.ToString('o')
+    }
+    $parent = Split-Path -Parent $DestinationPath
+    if ($parent) {
+        $null = New-Item -ItemType Directory -Path $parent -Force
+    }
+    $config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $DestinationPath -Encoding utf8
+    return Get-MiOpsConfig -Path $DestinationPath -RepositoryRoot (Split-Path -Parent (Split-Path -Parent $ExamplePath))
+}
+
 function Invoke-MiOpsAzJson {
     [CmdletBinding()]
     param(
@@ -841,6 +1066,18 @@ function Get-MiOpsSqlAdapterStatus {
 Export-ModuleMember -Function @(
     'Get-MiOpsConfig',
     'Test-MiOpsResourceAllowed',
+    'Test-MiOpsTenantId',
+    'Test-MiOpsSubscriptionId',
+    'Select-MiOpsNumberedItem',
+    'Test-MiOpsTypedConfirmation',
+    'Invoke-MiOpsAzLogin',
+    'ConvertTo-MiOpsTenantChoices',
+    'Get-MiOpsTenants',
+    'Resolve-MiOpsTenant',
+    'Get-MiOpsEnabledSubscriptions',
+    'Set-MiOpsSubscription',
+    'Get-MiOpsManagedInstances',
+    'New-MiOpsLocalConfig',
     'ConvertTo-MiOpsRedactedObject',
     'Invoke-MiOpsPreflight',
     'Get-MiOpsStatus',

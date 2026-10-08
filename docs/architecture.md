@@ -9,7 +9,11 @@ flowchart LR
     Operator[Operator] --> Copilot[Local GitHub Copilot CLI]
     Copilot --> Skills[Public SKILL.md guidance]
     Skills --> Script[miops.ps1]
+    Script --> Setup[Tenant login, subscription and MI selection]
     Script --> Module[MiOps PowerShell module]
+    Setup --> Az
+    Setup --> LocalConfig[Ignored exact MI allowlist]
+    LocalConfig --> Module
     Module --> Policy[Config, allowlist, dry-run, exact approval]
     Module --> Az[Azure CLI]
     Az --> ARM[Azure SQL MI and ARM]
@@ -29,13 +33,21 @@ Azure SRE Agent is not shown in the runtime because it is not required. A future
 | Component | Responsibility | Status |
 |---|---|---|
 | `miops.ps1` | Stable CLI command dispatcher | Implemented, locally tested |
-| `src/MiOps.psm1` | Config, policy, Azure adapters, state, audit, evidence, support draft | Implemented, locally tested without Azure |
+| `src/MiOps.psm1` | Setup validation/selection, config, policy, Azure adapters, state, audit, evidence, support draft | Implemented, locally tested without Azure |
 | `config/miops.example.json` | Checked-in schema/example for one MI | Implemented |
 | `config/miops.local.json` | Operator-owned local configuration | Ignored |
 | `.miops/operations` | Durable local operation records | Implemented |
 | `.miops/audit.jsonl` | Redacted local audit log | Implemented |
 | SQL adapter | Separate least-privilege DMV/Query Store integration | Interface only |
 | Support API submission | Entitlement-aware ticket creation | Not implemented |
+
+## Onboarding and interactive flow
+
+`setup` invokes the fixed Azure CLI browser login command for a tenant domain/GUID, or adds `--use-device-code` when requested. Authentication is completed by the operator locally; credentials and login results are not persisted. Using core `az account list --all` metadata, the flow resolves the tenant to a GUID, lists only accessible enabled subscriptions for that tenant, sets and independently verifies the active account, and runs the fixed `az sql mi list --subscription <id>` discovery command. No Azure CLI extension is required.
+
+The selected MI is displayed with operational metadata and requires a typed `CONFIGURE <mi-name>` confirmation. Only then is ignored `config/miops.local.json` created or updated from the checked-in example, with the same exact resource ID in `resource.id` and the sole `allowedResourceIds` entry.
+
+`interactive` is a presentation layer over existing deterministic functions. Read and dry-run choices execute immediately. Start/stop apply choices first read and display the exact MI name, resource ID, and current state, then require `START <mi-name>` or `STOP <mi-name>`. The internally supplied approval remains the exact configured allowlisted resource ID.
 
 ## Lifecycle flow
 

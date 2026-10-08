@@ -9,6 +9,8 @@ Phase 1 uses local GitHub Copilot CLI, public/open-source skill definitions, Pow
 ## Implemented
 
 - One configured MI and an exact canonical resource allowlist.
+- Interactive tenant login, enabled subscription selection, MI discovery, and ignored local allowlist generation.
+- Interactive supported-operations menu with action-and-MI-bound typed lifecycle confirmation.
 - JSON config validation and ignored local config.
 - Azure CLI/login/subscription/provider/read-access preflight where observable.
 - MI status/configuration read.
@@ -68,6 +70,9 @@ Repository code and public skills can be free/open source. Copilot/model access,
 
 Locally validated:
 
+- Tenant/subscription identifier and numbered-selection validation.
+- Safe local config generation and cancellation.
+- Typed lifecycle confirmation bound to action and MI name.
 - Invalid or non-allowlisted configuration is rejected.
 - Allowlisting is exact and case-insensitive.
 - Mutations default to dry-run.
