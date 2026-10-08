@@ -23,6 +23,20 @@ function Assert-Throws {
     throw $Message
 }
 
+function Assert-ThrowsLike {
+    param([scriptblock]$Script, [string]$Pattern, [string]$Message)
+    try {
+        & $Script
+    }
+    catch {
+        if ($_.Exception.Message -like $Pattern) {
+            return
+        }
+        throw "$Message Actual: $($_.Exception.Message)"
+    }
+    throw $Message
+}
+
 function Test-Case {
     param([string]$Name, [scriptblock]$Test)
     try {
@@ -136,6 +150,42 @@ try {
         $tenants = @(ConvertTo-MiOpsTenantChoices -Subscriptions $subscriptions)
         Assert-True ($tenants.Count -eq 1) 'Subscriptions from one tenant produced duplicate tenant choices.'
         Assert-True ($tenants[0].defaultDomain -eq 'fdpo.onmicrosoft.com') 'Tenant domain metadata was not preserved.'
+    }
+
+    Test-Case 'tenant choices tolerate missing optional metadata' {
+        $subscriptions = @(
+            [pscustomobject]@{
+                id = '22222222-2222-2222-2222-222222222222'
+                tenantId = '11111111-1111-1111-1111-111111111111'
+                state = 'Enabled'
+            }
+        )
+        $tenants = @(ConvertTo-MiOpsTenantChoices -Subscriptions $subscriptions)
+        Assert-True ($tenants.Count -eq 1) 'GUID-only tenant was not returned.'
+        Assert-True ($tenants[0].tenantId -eq '11111111-1111-1111-1111-111111111111') 'Tenant GUID was not preserved.'
+        Assert-True ([string]::IsNullOrEmpty($tenants[0].defaultDomain)) 'Missing tenant domain was not represented safely.'
+        Assert-True ([string]::IsNullOrEmpty($tenants[0].displayName)) 'Missing tenant display name was not represented safely.'
+    }
+
+    Test-Case 'GUID-only tenant matching does not require domain metadata' {
+        $tenants = @([pscustomobject]@{
+            tenantId = '11111111-1111-1111-1111-111111111111'
+            defaultDomain = ''
+            displayName = ''
+        })
+        $tenant = Resolve-MiOpsTenant -TenantId '11111111-1111-1111-1111-111111111111' -Tenants $tenants
+        Assert-True ($tenant.tenantId -eq '11111111-1111-1111-1111-111111111111') 'GUID-only tenant matching failed.'
+    }
+
+    Test-Case 'domain resolution failure lists actionable tenant GUIDs' {
+        $tenants = @([pscustomobject]@{
+            tenantId = '11111111-1111-1111-1111-111111111111'
+            defaultDomain = ''
+            displayName = ''
+        })
+        Assert-ThrowsLike {
+            Resolve-MiOpsTenant -TenantId 'fdpo.onmicrosoft.com' -Tenants $tenants
+        } '*Available tenant GUIDs/domains: 11111111-1111-1111-1111-111111111111*Retry with the tenant GUID shown*' 'Domain resolution failure was not actionable.'
     }
 
     Test-Case 'numbered selection validates bounds and supports cancellation' {

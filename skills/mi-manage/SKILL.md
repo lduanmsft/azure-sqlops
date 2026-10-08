@@ -26,6 +26,8 @@ pwsh .\miops.ps1 setup -TenantId '<tenant-domain-or-guid>' -UseDeviceCode
 
 `fdpo.onmicrosoft.com` is an example only. The operator completes authentication locally using Azure CLI. Never request, accept, echo, or store passwords, access tokens, refresh tokens, or client secrets. Subscription IDs are identifiers, not credentials.
 
+Browser and device-code flows cannot bypass Conditional Access, device compliance, or tenant policy. If Azure rejects login for those reasons, use an organization-approved managed device or contact the tenant administrator.
+
 If `-TenantId` is omitted, setup presents the tenants returned by Azure CLI as a numbered menu. If `-SubscriptionId` is omitted, setup lists accessible enabled subscriptions in the chosen tenant and asks for a numbered selection. It then confirms the active tenant/subscription, discovers all MIs with `az sql mi list --subscription ...`, shows name, resource group, location, state, tier, and full resource ID, and requires `CONFIGURE <mi-name>` before writing ignored `config/miops.local.json`.
 
 Known identifiers can be supplied for repeatable setup, but exact MI approval remains mandatory:

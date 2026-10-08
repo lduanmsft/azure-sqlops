@@ -23,6 +23,8 @@ Use a dedicated operator identity with the narrowest practical scope. Read-only 
 
 `miops.ps1 setup` uses Azure CLI interactive browser login or explicit device-code login for a tenant domain/GUID. The operator completes authentication locally. Do not store Azure tokens, client secrets, connection strings, passwords, or other credentials in config. Subscription IDs and tenant IDs are identifiers, not credentials. The ignored local config may retain those identifiers as onboarding metadata.
 
+Neither browser nor device-code login bypasses Conditional Access or device-compliance policy. Operators must use an organization-approved managed device or contact the tenant administrator when policy blocks Azure CLI authentication.
+
 ## SQL authorization
 
 Azure RBAC does not grant SQL DMV/Query Store access. A future adapter must use a separate least-privilege SQL identity and reviewed read-only queries. Avoid `sysadmin`, `db_owner`, arbitrary generated SQL, and unrestricted result sets.

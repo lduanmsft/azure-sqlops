@@ -67,31 +67,61 @@ function Invoke-Setup {
     if ($UseDeviceCode) {
         Write-Host 'Device-code mode is enabled. Follow the Azure CLI instructions locally in this terminal and browser.'
     }
-    Invoke-MiOpsAzLogin -TenantId $TenantId -UseDeviceCode:$UseDeviceCode
+    $loginContext = Invoke-MiOpsAzLogin -TenantId $TenantId -UseDeviceCode:$UseDeviceCode
+    $loginSubscriptions = @($loginContext.subscriptions)
     $tenant = $null
     if ($TenantId) {
-        $tenant = Resolve-MiOpsTenant -TenantId $TenantId
+        $loginTenantGuid = [string](Get-MiOpsPropertyValue -InputObject $loginContext.account -Name 'tenantId')
+        if ([string]::IsNullOrWhiteSpace($loginTenantGuid)) {
+            throw "Azure CLI login succeeded for '$TenantId', but az account show returned no tenantId."
+        }
+        if (Test-MiOpsSubscriptionId -SubscriptionId $TenantId) {
+            if ($loginTenantGuid -ine $TenantId) {
+                throw "Azure CLI login returned tenant '$loginTenantGuid', not requested tenant '$TenantId'."
+            }
+        }
+        $tenantChoices = @(ConvertTo-MiOpsTenantChoices -Subscriptions $loginSubscriptions)
+        $tenant = @($tenantChoices | Where-Object {
+            [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'tenantId') -ieq $loginTenantGuid
+        }) | Select-Object -First 1
+        if (-not $tenant) {
+            $tenant = [pscustomobject]@{
+                tenantId = $loginTenantGuid
+                defaultDomain = if ($TenantId -notmatch '^(?i)[0-9a-f]{8}-') { $TenantId } else { '' }
+                displayName = ''
+            }
+        }
     }
     elseif ($SubscriptionId) {
-        $subscriptionMatch = @(Get-MiOpsEnabledSubscriptions | Where-Object { [string]$_.id -ieq $SubscriptionId })
+        $subscriptionMatch = @($loginSubscriptions | Where-Object {
+            [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'state') -eq 'Enabled' -and
+            [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'id') -ieq $SubscriptionId
+        })
         if ($subscriptionMatch.Count -ne 1) {
             throw "Subscription '$SubscriptionId' is not an accessible enabled subscription."
         }
-        $tenantGuidFromSubscription = [string]$subscriptionMatch[0].tenantId
-        $tenant = @(Get-MiOpsTenants | Where-Object { [string]$_.tenantId -ieq $tenantGuidFromSubscription }) | Select-Object -First 1
+        $tenantGuidFromSubscription = [string](Get-MiOpsPropertyValue -InputObject $subscriptionMatch[0] -Name 'tenantId')
+        $tenant = @(ConvertTo-MiOpsTenantChoices -Subscriptions $loginSubscriptions | Where-Object {
+            [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'tenantId') -ieq $tenantGuidFromSubscription
+        }) | Select-Object -First 1
         if (-not $tenant) {
             throw "Azure CLI could not resolve the tenant for subscription '$SubscriptionId'."
         }
     }
     else {
-        $tenants = @(Get-MiOpsTenants)
+        $tenants = @(ConvertTo-MiOpsTenantChoices -Subscriptions @($loginSubscriptions | Where-Object {
+            [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'state') -eq 'Enabled'
+        }))
         if ($tenants.Count -eq 0) {
             throw 'No signed-in Azure tenants were returned by Azure CLI.'
         }
         Write-Host 'Accessible tenants:'
         Show-NumberedItems -Items $tenants -Formatter {
             param($item)
-            "$($item.defaultDomain) | $($item.displayName) | $($item.tenantId)"
+            $domain = [string](Get-MiOpsPropertyValue -InputObject $item -Name 'defaultDomain')
+            $displayName = [string](Get-MiOpsPropertyValue -InputObject $item -Name 'displayName')
+            $guid = [string](Get-MiOpsPropertyValue -InputObject $item -Name 'tenantId')
+            "$domain | $displayName | $guid"
         }
         $tenant = Select-MiOpsNumberedItem -Items $tenants -Prompt 'Select a tenant'
         if (-not $tenant) {
@@ -99,8 +129,11 @@ function Invoke-Setup {
             return
         }
     }
-    $tenantGuid = [string]$tenant.tenantId
-    $subscriptions = @(Get-MiOpsEnabledSubscriptions -TenantGuid $tenantGuid)
+    $tenantGuid = [string](Get-MiOpsPropertyValue -InputObject $tenant -Name 'tenantId')
+    $subscriptions = @($loginSubscriptions | Where-Object {
+        [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'state') -eq 'Enabled' -and
+        [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'tenantId') -ieq $tenantGuid
+    } | Sort-Object name, id)
     if ($subscriptions.Count -eq 0) {
         throw "No accessible enabled subscriptions were found for tenant '$tenantGuid'."
     }
