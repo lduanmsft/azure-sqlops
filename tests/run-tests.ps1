@@ -209,6 +209,113 @@ try {
         Assert-True ($selected.id -eq $resourceId) 'Managed Instance resource ID changed during selection.'
     }
 
+    Test-Case 'inventory selector rejects arbitrary resource kinds' {
+        Assert-Throws {
+            Get-MiOpsInventoryQuery -ResourceKind 'Microsoft.Compute/disks' -SubscriptionId '00000000-0000-0000-0000-000000000000'
+        } 'Arbitrary inventory resource kind was accepted.'
+    }
+
+    Test-Case 'inventory queries use fixed Azure CLI arguments' {
+        $subscriptionId = '00000000-0000-0000-0000-000000000000'
+        $allQuery = @(Get-MiOpsInventoryQuery -ResourceKind all -SubscriptionId $subscriptionId)
+        $vmQuery = @(Get-MiOpsInventoryQuery -ResourceKind vm -SubscriptionId $subscriptionId)
+        $miQuery = @(Get-MiOpsInventoryQuery -ResourceKind mi -SubscriptionId $subscriptionId)
+        Assert-True (($allQuery -join ' ') -eq "resource list --subscription $subscriptionId") 'All-resource query changed from the fixed command.'
+        Assert-True (($vmQuery -join ' ') -eq "resource list --subscription $subscriptionId --resource-type Microsoft.Compute/virtualMachines") 'VM query changed from the fixed resource type.'
+        Assert-True (($miQuery -join ' ') -eq "sql mi list --subscription $subscriptionId") 'MI inventory did not reuse the fixed MI enumeration command.'
+    }
+
+    Test-Case 'inventory context enforces configured tenant and subscription' {
+        $configured = $baseConfig.Clone()
+        $configured.onboarding = @{
+            tenantId = '11111111-1111-1111-1111-111111111111'
+            subscriptionId = '00000000-0000-0000-0000-000000000000'
+        }
+        $account = [pscustomobject]@{
+            id = '00000000-0000-0000-0000-000000000000'
+            tenantId = '11111111-1111-1111-1111-111111111111'
+        }
+        $context = Resolve-MiOpsInventoryContext -Account $account -Config $configured
+        Assert-True ($context.subscriptionId -eq $configured.onboarding.subscriptionId) 'Configured subscription was not selected.'
+        Assert-True ($context.configurationFound) 'Configured inventory context was not reported.'
+        Assert-ThrowsLike {
+            Resolve-MiOpsInventoryContext -Account ([pscustomobject]@{
+                id = '22222222-2222-2222-2222-222222222222'
+                tenantId = '11111111-1111-1111-1111-111111111111'
+            }) -Config $configured
+        } '*does not match configured subscription*' 'Mismatched active subscription was accepted.'
+        Assert-ThrowsLike {
+            Resolve-MiOpsInventoryContext -Account ([pscustomobject]@{
+                id = '00000000-0000-0000-0000-000000000000'
+                tenantId = '33333333-3333-3333-3333-333333333333'
+            }) -Config $configured
+        } '*does not match configured tenant*' 'Mismatched active tenant was accepted.'
+    }
+
+    Test-Case 'inventory supports legacy config without onboarding metadata' {
+        $account = [pscustomobject]@{
+            id = '00000000-0000-0000-0000-000000000000'
+            tenantId = '11111111-1111-1111-1111-111111111111'
+        }
+        $context = Resolve-MiOpsInventoryContext -Account $account -Config $baseConfig
+        Assert-True ($context.subscriptionId -eq $account.id) 'Subscription was not derived from the configured MI resource ID.'
+        Assert-True ($context.configurationFound) 'Legacy config was not treated as configuration.'
+    }
+
+    Test-Case 'inventory without config uses only the active subscription' {
+        $account = [pscustomobject]@{
+            id = '00000000-0000-0000-0000-000000000000'
+            tenantId = '11111111-1111-1111-1111-111111111111'
+        }
+        $context = Resolve-MiOpsInventoryContext -Account $account
+        Assert-True (-not $context.configurationFound) 'Missing config was not reported.'
+        Assert-True ($context.subscriptionId -eq $account.id) 'Active subscription was not used.'
+        Assert-True ($context.note -like 'No local onboarding configuration*') 'Missing config note was not explicit.'
+        Assert-ThrowsLike {
+            Resolve-MiOpsInventoryContext -Account $account -SubscriptionId '22222222-2222-2222-2222-222222222222'
+        } '*does not match requested subscription*' 'A different subscription was queried silently.'
+    }
+
+    Test-Case 'inventory output exposes only minimal resource fields' {
+        $raw = @([pscustomobject]@{
+            name = 'vm-one'
+            resourceGroup = 'rg-one'
+            type = 'Microsoft.Compute/virtualMachines'
+            location = 'eastus'
+            id = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-one/providers/Microsoft.Compute/virtualMachines/vm-one'
+            tags = @{ secret = 'omit-me' }
+            properties = @{ verbose = 'omit-me' }
+            identity = @{ principalId = 'omit-me' }
+        })
+        $items = @(ConvertTo-MiOpsInventoryItems -ResourceKind vm -Resources $raw)
+        Assert-True ($items.Count -eq 1) 'VM inventory item was lost.'
+        Assert-True (($items[0].PSObject.Properties.Name -join ',') -eq 'name,resourceGroup,type,location,id') 'VM inventory exposed fields beyond the minimal shape.'
+    }
+
+    Test-Case 'MI inventory includes state and tier without verbose properties' {
+        $raw = @([pscustomobject]@{
+            name = 'mi-one'
+            resourceGroup = 'rg-one'
+            type = 'Microsoft.Sql/managedInstances'
+            location = 'eastus'
+            id = $resourceId
+            state = 'Ready'
+            provisioningState = 'Succeeded'
+            sku = [pscustomobject]@{ tier = 'GeneralPurpose'; capacity = 8 }
+            administratorLogin = 'omit-me'
+        })
+        $items = @(ConvertTo-MiOpsInventoryItems -ResourceKind mi -Resources $raw)
+        Assert-True ($items[0].state -eq 'Ready') 'MI state was not preserved.'
+        Assert-True ($items[0].tier -eq 'GeneralPurpose') 'MI tier was not preserved.'
+        Assert-True ($items[0].PSObject.Properties.Name -notcontains 'administratorLogin') 'MI inventory exposed an unapproved property.'
+        Assert-True ($items[0].PSObject.Properties.Name -notcontains 'sku') 'MI inventory exposed the verbose SKU object.'
+    }
+
+    Test-Case 'empty inventory shaping returns an empty collection' {
+        $items = @(ConvertTo-MiOpsInventoryItems -ResourceKind all -Resources @())
+        Assert-True ($items.Count -eq 0) 'Empty inventory did not remain empty.'
+    }
+
     Test-Case 'local config generation sets one exact allowlisted resource' {
         $destination = Join-Path $tempRoot 'generated\miops.local.json'
         $example = Join-Path $repositoryRoot 'config\miops.example.json'

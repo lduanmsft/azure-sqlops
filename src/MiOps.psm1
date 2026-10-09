@@ -424,6 +424,195 @@ function Get-MiOpsManagedInstances {
     }
 }
 
+function Get-MiOpsInventoryQuery {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateSet('all', 'vm', 'mi')][string]$ResourceKind,
+        [Parameter(Mandatory)][string]$SubscriptionId
+    )
+
+    if (-not (Test-MiOpsSubscriptionId -SubscriptionId $SubscriptionId)) {
+        throw 'SubscriptionId must be a GUID.'
+    }
+
+    switch ($ResourceKind) {
+        'all' {
+            return @('resource', 'list', '--subscription', $SubscriptionId)
+        }
+        'vm' {
+            return @(
+                'resource', 'list',
+                '--subscription', $SubscriptionId,
+                '--resource-type', 'Microsoft.Compute/virtualMachines'
+            )
+        }
+        'mi' {
+            return @('sql', 'mi', 'list', '--subscription', $SubscriptionId)
+        }
+    }
+}
+
+function Resolve-MiOpsInventoryContext {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Account,
+        [hashtable]$Config,
+        [string]$SubscriptionId
+    )
+
+    $activeSubscriptionId = [string](Get-MiOpsPropertyValue -InputObject $Account -Name 'id')
+    $activeTenantId = [string](Get-MiOpsPropertyValue -InputObject $Account -Name 'tenantId')
+    if (-not (Test-MiOpsSubscriptionId -SubscriptionId $activeSubscriptionId)) {
+        throw 'Azure CLI is not logged in to a valid active subscription. Run az login and select a subscription.'
+    }
+    if ([string]::IsNullOrWhiteSpace($activeTenantId)) {
+        throw 'Azure CLI active account returned no tenantId. Run az login again.'
+    }
+    if ($SubscriptionId -and -not (Test-MiOpsSubscriptionId -SubscriptionId $SubscriptionId)) {
+        throw 'SubscriptionId must be a GUID.'
+    }
+
+    $configuredSubscriptionId = ''
+    $configuredTenantId = ''
+    if ($Config) {
+        $onboarding = Get-MiOpsPropertyValue -InputObject $Config -Name 'onboarding'
+        $configuredSubscriptionId = [string](Get-MiOpsPropertyValue -InputObject $onboarding -Name 'subscriptionId')
+        if ([string]::IsNullOrWhiteSpace($configuredSubscriptionId)) {
+            $configuredSubscriptionId = ([regex]::Match(
+                [string]$Config.resource.id,
+                '(?i)^/subscriptions/([^/]+)'
+            )).Groups[1].Value
+        }
+        $configuredTenantId = [string](Get-MiOpsPropertyValue -InputObject $onboarding -Name 'tenantId')
+        if (-not (Test-MiOpsSubscriptionId -SubscriptionId $configuredSubscriptionId)) {
+            throw 'The onboarding configuration does not contain a valid subscription ID.'
+        }
+        if ($SubscriptionId -and $SubscriptionId -ine $configuredSubscriptionId) {
+            throw "Requested subscription '$SubscriptionId' does not match configured subscription '$configuredSubscriptionId'."
+        }
+        if ($activeSubscriptionId -ine $configuredSubscriptionId) {
+            throw "Active Azure subscription '$activeSubscriptionId' does not match configured subscription '$configuredSubscriptionId'. Select the configured subscription explicitly before retrying."
+        }
+        if ($configuredTenantId -and $activeTenantId -ine $configuredTenantId) {
+            throw "Active Azure tenant '$activeTenantId' does not match configured tenant '$configuredTenantId'. Sign in to the configured tenant before retrying."
+        }
+    }
+    elseif ($SubscriptionId -and $activeSubscriptionId -ine $SubscriptionId) {
+        throw "Active Azure subscription '$activeSubscriptionId' does not match requested subscription '$SubscriptionId'. Select the requested subscription explicitly before retrying."
+    }
+
+    return [pscustomobject]@{
+        subscriptionId = if ($Config) { $configuredSubscriptionId } elseif ($SubscriptionId) { $SubscriptionId } else { $activeSubscriptionId }
+        tenantId = $activeTenantId
+        configurationFound = [bool]$Config
+        configurationSource = if ($Config) { 'onboarding-config' } else { 'active-account' }
+        note = if ($Config) {
+            'Active Azure tenant and subscription match the local onboarding configuration.'
+        }
+        else {
+            'No local onboarding configuration was found; inventory is scoped to the active Azure CLI subscription.'
+        }
+    }
+}
+
+function ConvertTo-MiOpsInventoryItems {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateSet('all', 'vm', 'mi')][string]$ResourceKind,
+        [object[]]$Resources
+    )
+
+    return @($Resources | ForEach-Object {
+        $item = [ordered]@{
+            name = [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'name')
+            resourceGroup = [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'resourceGroup')
+            type = [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'type')
+            location = [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'location')
+            id = [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'id')
+        }
+        if ($ResourceKind -eq 'mi') {
+            $sku = Get-MiOpsPropertyValue -InputObject $_ -Name 'sku'
+            $item.state = [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'state')
+            $item.provisioningState = [string](Get-MiOpsPropertyValue -InputObject $_ -Name 'provisioningState')
+            $item.tier = [string](Get-MiOpsPropertyValue -InputObject $sku -Name 'tier')
+        }
+        [pscustomobject]$item
+    })
+}
+
+function Get-MiOpsInventory {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateSet('all', 'vm', 'mi')][string]$ResourceKind,
+        [hashtable]$Config,
+        [Parameter(Mandatory)][string]$DataRoot,
+        [string]$SubscriptionId
+    )
+
+    $auditConfig = if ($Config) {
+        $Config
+    }
+    else {
+        @{ state = @{ directory = Join-Path ([System.IO.Path]::GetFullPath($DataRoot)) '.miops' } }
+    }
+
+    try {
+        $account = Invoke-MiOpsAzJson -Arguments @('account', 'show')
+    }
+    catch {
+        $failure = @{
+            resourceKind = $ResourceKind
+            subscriptionId = $SubscriptionId
+            reason = $_.Exception.Message
+        }
+        Write-MiOpsAudit -Config $auditConfig -Event 'inventory.failed' -Data $failure
+        throw "Azure resource inventory requires an authenticated Azure CLI account. Run az login and select the intended subscription. $($_.Exception.Message)"
+    }
+
+    $context = Resolve-MiOpsInventoryContext -Account $account -Config $Config -SubscriptionId $SubscriptionId
+    $arguments = @(Get-MiOpsInventoryQuery -ResourceKind $ResourceKind -SubscriptionId $context.subscriptionId)
+    try {
+        $resources = @(Invoke-MiOpsAzJson -Arguments $arguments)
+    }
+    catch {
+        $failure = @{
+            resourceKind = $ResourceKind
+            subscriptionId = $context.subscriptionId
+            tenantId = $context.tenantId
+            reason = $_.Exception.Message
+        }
+        Write-MiOpsAudit -Config $auditConfig -Event 'inventory.failed' -Data $failure
+        $permission = if ($ResourceKind -eq 'mi') { 'Microsoft.Sql managed instance read' } else { 'Azure Resource Manager resource read' }
+        throw "Unable to list '$ResourceKind' inventory in subscription '$($context.subscriptionId)'. Verify $permission permission. $($_.Exception.Message)"
+    }
+
+    $items = @(ConvertTo-MiOpsInventoryItems -ResourceKind $ResourceKind -Resources $resources)
+    $result = [ordered]@{
+        collectedAtUtc = [DateTime]::UtcNow.ToString('o')
+        resourceKind = $ResourceKind
+        subscriptionId = $context.subscriptionId
+        tenantId = $context.tenantId
+        configurationFound = $context.configurationFound
+        configurationSource = $context.configurationSource
+        count = $items.Count
+        resources = $items
+        note = if ($items.Count -eq 0) {
+            "No '$ResourceKind' resources were found in subscription '$($context.subscriptionId)'. $($context.note)"
+        }
+        else {
+            $context.note
+        }
+    }
+    Write-MiOpsAudit -Config $auditConfig -Event 'inventory.read' -Data @{
+        resourceKind = $ResourceKind
+        subscriptionId = $context.subscriptionId
+        tenantId = $context.tenantId
+        configurationFound = $context.configurationFound
+        count = $items.Count
+    }
+    return [pscustomobject]$result
+}
+
 function New-MiOpsLocalConfig {
     [CmdletBinding()]
     param(
@@ -1135,6 +1324,10 @@ Export-ModuleMember -Function @(
     'Get-MiOpsEnabledSubscriptions',
     'Set-MiOpsSubscription',
     'Get-MiOpsManagedInstances',
+    'Get-MiOpsInventoryQuery',
+    'Resolve-MiOpsInventoryContext',
+    'ConvertTo-MiOpsInventoryItems',
+    'Get-MiOpsInventory',
     'New-MiOpsLocalConfig',
     'ConvertTo-MiOpsRedactedObject',
     'Invoke-MiOpsPreflight',

@@ -1,6 +1,6 @@
 # GitHub Copilot CLI plugin
 
-The `azure-sqlops` plugin turns the repository's four Azure SQL Managed Instance skills into an installable conversational experience. The installed package includes the deterministic PowerShell runtime, so Copilot CLI can use it from any working directory.
+The `azure-sqlops` plugin turns the repository's Azure inventory and SQL Managed Instance skills into one installable conversational experience. The installed package includes the deterministic PowerShell runtime, so Copilot CLI can use it from any working directory.
 
 ## Install from GitHub
 
@@ -31,12 +31,24 @@ Start `copilot` in the directory where you want local Azure SQLOps configuration
 
 ```text
 登录 fdpo tenant，列出 MI，启动选中的实例
+列出所有资源
+列出所有 VM
+列出所有虚拟机
+列出所有 MI
 调查这个 MI 最近 24 小时的异常
 根据现有证据判断是否需要扩容
 基于最新证据生成支持工单草稿
 ```
 
 `fdpo.onmicrosoft.com` is only an example tenant domain.
+
+Inventory prompt routing:
+
+- `列出所有资源` / `list all resources` lists resources with the fixed `all` selector.
+- `列出所有 VM` / `列出所有虚拟机` / `list all VMs` lists only `Microsoft.Compute/virtualMachines`.
+- `列出所有 MI` / `list all Managed Instances` reuses Azure SQL MI enumeration.
+
+These are read-only listing requests. They do not configure an MI and never add a listed resource to the lifecycle allowlist.
 
 ## Initial setup
 
@@ -66,9 +78,11 @@ These files can contain operational metadata. Keep the directory private, review
 
 ## Safety and capability boundaries
 
-The agent can inspect one allowlisted existing MI, collect bounded Azure control-plane evidence, produce capacity guidance, start or stop an eligible MI, inspect or delete an existing start/stop schedule, poll durable operation records, and create a redacted local Support draft.
+The agent can list minimal metadata for Azure resources, VMs, or MIs in the validated selected/current subscription. It can also inspect one allowlisted existing MI, collect bounded Azure control-plane evidence, produce capacity guidance, start or stop an eligible MI, inspect or delete an existing start/stop schedule, poll durable operation records, and create a redacted local Support draft.
 
-The agent cannot provision or delete an MI, resize it, fail it over, create or update automatic schedules, execute T-SQL, kill sessions, submit a Microsoft Support request, or claim Azure MCP MI lifecycle support. SQL DMV and Query Store diagnostics are not implemented.
+The inventory selector is closed to `all`, `vm`, and `mi`. The agent cannot accept arbitrary Azure CLI fragments, JMESPath, resource type strings, URLs, or shell arguments. It cannot provision or delete resources, resize or fail over an MI, perform VM actions, create or update automatic schedules, execute T-SQL, kill sessions, submit a Microsoft Support request, or claim Azure MCP MI lifecycle support. SQL DMV and Query Store diagnostics are not implemented.
+
+When onboarding config exists, inventory verifies that the active Azure CLI tenant and subscription match it. Without config, the result explicitly states that the current active subscription was used. Missing login, mismatches, permission failures, and empty results are reported explicitly. Inventory writes a redacted local audit event.
 
 Mutations remain deterministic:
 
@@ -86,6 +100,9 @@ Existing repository users can continue to run:
 ```powershell
 pwsh .\miops.ps1 setup
 pwsh .\miops.ps1 interactive
+pwsh .\miops.ps1 inventory -ResourceKind all
+pwsh .\miops.ps1 inventory -ResourceKind vm
+pwsh .\miops.ps1 inventory -ResourceKind mi
 pwsh .\miops.ps1 status
 ```
 

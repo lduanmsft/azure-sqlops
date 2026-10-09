@@ -44,5 +44,11 @@ $runtimeText = Get-Content -LiteralPath (Join-Path $pluginRoot 'runtime\miops.ps
 Assert-True ($runtimeText -match '\[string\]\$DataRoot') 'Bundled runtime does not expose an explicit data root.'
 Assert-True ($runtimeText -match '\[string\]\$TypedConfirmation') 'Bundled runtime does not expose deterministic typed confirmation.'
 Assert-True ($runtimeText -match 'Assert-MiOpsMutationApproval|Invoke-MiOpsLifecycle') 'Bundled runtime is missing deterministic lifecycle dispatch.'
+Assert-True ($runtimeText -match "'inventory'") 'Bundled runtime is missing inventory dispatch.'
+Assert-True ($runtimeText -match "\[ValidateSet\('all', 'vm', 'mi'\)\]") 'Bundled runtime inventory selector is not closed.'
+
+$moduleText = Get-Content -LiteralPath (Join-Path $pluginRoot 'runtime\src\MiOps.psm1') -Raw
+Assert-True ($moduleText -match 'Microsoft\.Compute/virtualMachines') 'Bundled runtime is missing the fixed VM resource type.'
+Assert-True ($moduleText -match 'inventory\.read') 'Bundled runtime is missing inventory audit events.'
 
 Write-Host 'Plugin structural tests passed.'
