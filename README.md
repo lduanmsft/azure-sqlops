@@ -1,6 +1,6 @@
-# Azure SQL Managed Instance Operations MVP
+# Azure Resource Inventory and SQL Managed Instance Operations
 
-Executable phase-1 operations toolkit for **one allowlisted existing Azure SQL Managed Instance (MI)**. The chosen runtime is local GitHub Copilot CLI, public/open-source skill definitions, PowerShell 7, and Azure CLI/ARM.
+Executable toolkit for read-only Azure resource inventory plus phase-1 operations for **one allowlisted existing Azure SQL Managed Instance (MI)**. The chosen runtime is local GitHub Copilot CLI, public/open-source skill definitions, PowerShell 7, and Azure CLI/ARM.
 
 > **Validation status:** The PowerShell safety, configuration, persistence, and redaction logic is implemented and locally tested. Azure commands have not been executed against a tenant or MI by this repository. Run preflight and approved non-production validation before operational use.
 
@@ -19,6 +19,9 @@ Then start `copilot` in the directory where local MI configuration and state sho
 
 ```text
 登录 fdpo tenant，列出 MI，启动选中的实例
+列出所有资源
+列出所有 VM
+列出所有 MI
 调查这个 MI
 是否需要扩容
 生成支持工单草稿
@@ -28,6 +31,8 @@ The plugin bundles the same deterministic PowerShell backend used below; it does
 
 ## Implemented phase-1 capabilities
 
+- List all Azure resources, all virtual machines, or all Azure SQL Managed Instances in the validated selected/current subscription using fixed read-only queries.
+- Return minimal inventory metadata; MI inventory additionally includes state, provisioning state, and tier when available.
 - Validate local configuration, Azure CLI login, active subscription, provider registration, and observable MI read access.
 - Interactively sign in to a tenant, choose an enabled subscription, discover MIs, and write one exact ignored local allowlist.
 - Offer a safe interactive operations menu that reuses the same deterministic functions as direct commands.
@@ -41,7 +46,7 @@ The plugin bundles the same deterministic PowerShell backend used below; it does
 - Record redacted local JSONL audit events.
 - Expose SQL DMV/Query Store diagnostics as a disabled optional adapter boundary.
 
-Phase 1 does **not** automatically resize, create/update automatic stop schedules, execute SQL diagnostics, remediate incidents, or submit Microsoft Support cases.
+Inventory never allowlists resources or grants mutation capability. Phase 1 does **not** perform VM actions, automatically resize, create/update automatic stop schedules, execute SQL diagnostics, remediate incidents, or submit Microsoft Support cases.
 
 ## Cost statement
 
@@ -71,6 +76,9 @@ pwsh .\miops.ps1 setup -TenantId '<tenant-domain-or-guid>' -UseDeviceCode
 
 pwsh .\miops.ps1 interactive
 
+pwsh .\miops.ps1 inventory -ResourceKind all
+pwsh .\miops.ps1 inventory -ResourceKind vm
+pwsh .\miops.ps1 inventory -ResourceKind mi
 pwsh .\miops.ps1 preflight
 pwsh .\miops.ps1 status
 pwsh .\miops.ps1 evidence -LookbackHours 24
@@ -79,6 +87,8 @@ pwsh .\miops.ps1 evidence -LookbackHours 24
 `fdpo.onmicrosoft.com` is an example tenant domain only. Azure CLI performs authentication and the operator completes it locally in the browser or device-code flow. The toolkit never accepts or stores passwords, tokens, or client secrets. Subscription IDs are resource identifiers, not credentials.
 
 Browser and device-code login are authentication interfaces, not Conditional Access bypasses. If the tenant requires device compliance or another organization policy, use an organization-approved managed device or contact the tenant administrator.
+
+Inventory uses the ignored onboarding config when it exists and refuses to query unless the active Azure CLI tenant/subscription matches it. Without config, it explicitly scopes to the active Azure CLI subscription. `-ResourceKind` is closed to `all`, `vm`, or `mi`; arbitrary Azure CLI fragments, JMESPath, resource type strings, URLs, and shell arguments are not accepted.
 
 For automation or repeatable setup, provide known identifiers while retaining exact selection approval:
 
@@ -126,6 +136,7 @@ pwsh .\miops.ps1 status -ConfigPath 'C:\secure-config\miops.json'
 |---|---|
 | `setup` | Azure CLI interactive login, enabled subscription selection, MI discovery, and exact local allowlist generation |
 | `interactive` | Menu for supported read-only, dry-run, explicitly confirmed lifecycle, polling, and support-draft guidance |
+| `inventory -ResourceKind all\|vm\|mi` | Read-only metadata inventory in the validated subscription; never changes the MI allowlist |
 | `preflight` | Read-only checks; cannot prove all write permissions or feature eligibility |
 | `status` | Read-only MI state |
 | `start`, `stop` | Dry-run unless exact explicit approval is provided |
@@ -154,7 +165,7 @@ Local files are not an immutable enterprise audit sink. Protect the workstation 
 pwsh -NoProfile -File .\tests\run-tests.ps1
 ```
 
-Tests do not require Azure. They cover configuration validation, exact allowlisting, dry-run/approval safeguards, operation persistence, redaction, plugin manifests, skill discovery, bundled runtime paths, and source/package synchronization.
+Tests do not require Azure. They cover inventory selector validation, fixed query construction, subscription matching, minimal result shaping, empty results, configuration validation, exact allowlisting, dry-run/approval safeguards, operation persistence, redaction, plugin manifests, skill discovery, bundled runtime paths, and source/package synchronization.
 
 When canonical runtime or skill files change, refresh the generated plugin package and verify it:
 
@@ -172,4 +183,4 @@ pwsh -NoProfile -File .\scripts\sync-plugin.ps1 -Check
 - [Platform decision](docs/decision-log/0001-platform-strategy.md)
 - [Optional SQL diagnostics adapter contract](adapters/sql/README.md)
 
-The four [`skills/`](skills) definitions give Copilot CLI exact command guidance while preserving read-only and mutating boundaries.
+The [`skills/`](skills) definitions give Copilot CLI exact command guidance while preserving inventory, MI read-only, and MI mutation boundaries.

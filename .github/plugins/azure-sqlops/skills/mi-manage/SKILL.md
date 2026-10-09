@@ -5,7 +5,7 @@ metadata:
   status: implemented-locally-not-tenant-validated
 ---
 
-# MI Manage
+# MI Manage and Inventory
 
 Use the runtime resolution procedure in `../azure-sqlops/SKILL.md`. Never assume the current directory is the repository. Set absolute `$miops` and `$dataRoot` paths before running commands. The runtime is local Copilot CLI + PowerShell 7 + Azure CLI; Azure SRE Agent is not required.
 
@@ -52,12 +52,25 @@ The interactive menu supports status, evidence, start/stop dry-runs, explicitly 
 ## Read-only commands
 
 ```powershell
+pwsh -NoProfile -File $miops inventory -DataRoot $dataRoot -ResourceKind all
+pwsh -NoProfile -File $miops inventory -DataRoot $dataRoot -ResourceKind vm
+pwsh -NoProfile -File $miops inventory -DataRoot $dataRoot -ResourceKind mi
 pwsh -NoProfile -File $miops preflight -DataRoot $dataRoot
 pwsh -NoProfile -File $miops status -DataRoot $dataRoot
 pwsh -NoProfile -File $miops schedule-show -DataRoot $dataRoot
 pwsh -NoProfile -File $miops schedule-plan -DataRoot $dataRoot
 pwsh -NoProfile -File $miops operation-poll -DataRoot $dataRoot -OperationId '<local-operation-id>'
 ```
+
+Use the closed selector exactly as routed:
+
+- "列出所有资源" / "list all resources" -> `all`
+- "列出所有 VM" / "列出所有虚拟机" / "list all VMs" -> `vm`
+- "列出所有 MI" / "列出所有 Managed Instance" / "list all MIs" -> `mi`
+
+Never pass arbitrary Azure CLI fragments, JMESPath, resource type strings, URLs, or shell arguments. Inventory uses the ignored onboarding config when present and requires the active Azure CLI tenant/subscription to match it. Without config, it explicitly uses the current active subscription. An optional `-SubscriptionId` must be a GUID and must match the active/configured subscription.
+
+Inventory returns minimal metadata only: name, resource group, type, location, and resource ID. MI inventory also includes state, provisioning state, and tier when Azure returns them. Empty results, missing config, missing login, subscription mismatch, and permission failures must be reported explicitly. Listing any resource is read-only and never adds it to the MI mutation allowlist.
 
 Report provider, permission, configuration, or evidence gaps exactly. Do not infer that preflight proves lifecycle write access.
 
@@ -96,6 +109,7 @@ Return the local operation ID and instruct polling. Use **Submitted** for CLI ac
 
 ## Prohibited
 
-- No provisioning, deletion, resize, failover, arbitrary `az` commands, or T-SQL.
+- No provisioning, deletion, resize, failover, VM actions, arbitrary `az` commands, or T-SQL.
 - No resource outside `allowedResourceIds`.
+- Inventory output never changes `allowedResourceIds`.
 - No claim of tenant validation.

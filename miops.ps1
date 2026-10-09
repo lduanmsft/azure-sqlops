@@ -5,6 +5,7 @@ param(
         'preflight',
         'setup',
         'interactive',
+        'inventory',
         'status',
         'start',
         'stop',
@@ -26,6 +27,8 @@ param(
     [string]$Impact = 'Describe the customer or business impact.',
     [string]$TenantId,
     [string]$SubscriptionId,
+    [ValidateSet('all', 'vm', 'mi')]
+    [string]$ResourceKind,
     [string]$ManagedInstanceId,
     [string]$ApproveManagedInstanceId,
     [int]$LookbackHours,
@@ -315,6 +318,18 @@ switch ($Command) {
     'interactive' {
         $config = Get-MiOpsConfig -Path $resolvedConfigPath -RepositoryRoot $resolvedDataRoot
         Invoke-Interactive -Config $config
+    }
+    'inventory' {
+        if (-not $ResourceKind) {
+            throw '-ResourceKind is required for inventory and must be one of: all, vm, mi.'
+        }
+        $config = if (Test-Path -LiteralPath $resolvedConfigPath -PathType Leaf) {
+            Get-MiOpsConfig -Path $resolvedConfigPath -RepositoryRoot $resolvedDataRoot
+        }
+        else {
+            $null
+        }
+        Get-MiOpsInventory -ResourceKind $ResourceKind -Config $config -DataRoot $resolvedDataRoot -SubscriptionId $SubscriptionId
     }
     'preflight' {
         $config = Get-MiOpsConfig -Path $resolvedConfigPath -RepositoryRoot $resolvedDataRoot

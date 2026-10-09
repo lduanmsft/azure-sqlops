@@ -10,11 +10,22 @@ metadata:
 Use this skill for prompts such as:
 
 - "登录 fdpo tenant，列出 MI，启动选中的实例"
+- "列出所有资源"
+- "列出所有 VM"
+- "列出所有 MI"
 - "调查这个 MI"
 - "是否需要扩容"
 - "生成支持工单草稿"
 
 Route setup, inventory, status, start/stop, schedule, and operation polling to `mi-manage`; read-only incident investigation to `mi-troubleshoot`; capacity recommendations to `mi-capacity`; and local Support draft generation to `mi-escalate`.
+
+Inventory routing is explicit:
+
+- "列出所有资源" / "list all resources" -> `inventory -ResourceKind all`
+- "列出所有 VM" / "列出所有虚拟机" / "list all VMs" -> `inventory -ResourceKind vm`
+- "列出所有 MI" / "列出所有 Managed Instance" / "list all MIs" -> `inventory -ResourceKind mi`
+
+An inventory request only returns read-only metadata from the selected/current subscription. It never adds a listed resource to `allowedResourceIds`. If a prompt asks to configure or operate one MI, use the onboarding/lifecycle flow instead of treating inventory output as mutation authorization.
 
 ## Resolve the runtime
 
@@ -39,8 +50,9 @@ The bundled runtime contains its own module and example configuration, so it doe
 
 - Authentication is local through Azure CLI browser or device-code login. Never request, accept, echo, or store passwords, access tokens, refresh tokens, client secrets, or other credentials.
 - Operate only the exact resource ID in `allowedResourceIds`.
+- Inventory may list Azure resources in the validated subscription, but listing never allowlists VM, MI, or other resources for mutation.
 - Start, stop, and schedule deletion are dry-run unless the deterministic backend receives `-Apply`, an exact `-ApproveResourceId`, and the exact typed phrase through its prompt or `-TypedConfirmation`.
 - Before lifecycle apply, show the exact MI name, resource ID, and current state and require the operator to type `START <mi-name>` or `STOP <mi-name>`. Schedule deletion requires `DELETE SCHEDULE <mi-name>`. A conversational "yes", tool approval, or menu selection does not satisfy this gate.
 - Persist and return the local operation ID. Call an operation verified only after `operation-poll` observes the desired resource state.
-- Do not provision, delete, resize, fail over, run arbitrary Azure CLI commands, execute T-SQL, or submit a Support request.
+- Do not provision, delete, resize, fail over, perform VM actions, run arbitrary Azure CLI commands, execute T-SQL, or submit a Support request.
 - Do not claim Azure MCP Managed Instance lifecycle support or tenant validation.
