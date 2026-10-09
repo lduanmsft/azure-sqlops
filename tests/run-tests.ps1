@@ -214,12 +214,13 @@ try {
         $example = Join-Path $repositoryRoot 'config\miops.example.json'
         $config = New-MiOpsLocalConfig -ExamplePath $example -DestinationPath $destination `
             -ResourceId $resourceId -TenantId '11111111-1111-1111-1111-111111111111' `
-            -SubscriptionId '00000000-0000-0000-0000-000000000000'
+            -SubscriptionId '00000000-0000-0000-0000-000000000000' -RepositoryRoot $tempRoot
         Assert-True (Test-Path -LiteralPath $destination) 'Local config was not created.'
         Assert-True ($config.resource.id -eq $resourceId) 'Generated resource.id is incorrect.'
         Assert-True ($config.resource.allowedResourceIds.Count -eq 1) 'Generated allowlist must contain exactly one resource.'
         Assert-True ($config.resource.allowedResourceIds[0] -eq $resourceId) 'Generated allowlist resource is incorrect.'
         Assert-True ($config.onboarding.subscriptionId -eq '00000000-0000-0000-0000-000000000000') 'Subscription metadata was not stored.'
+        Assert-True ($config.state.directory.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) 'Generated config did not resolve state under the requested data root.'
         Assert-True ((Get-Content -LiteralPath $example -Raw) -notmatch 'test-mi') 'Checked-in example was modified.'
     }
 
@@ -228,6 +229,8 @@ try {
         Assert-True (-not (Test-MiOpsTypedConfirmation -Action START -ManagedInstanceName 'test-mi' -Confirmation 'STOP test-mi')) 'Wrong action confirmation was accepted.'
         Assert-True (-not (Test-MiOpsTypedConfirmation -Action STOP -ManagedInstanceName 'test-mi' -Confirmation 'STOP other-mi')) 'Wrong MI confirmation was accepted.'
         Assert-True (-not (Test-MiOpsTypedConfirmation -Action STOP -ManagedInstanceName 'test-mi' -Confirmation 'stop test-mi')) 'Case-changed confirmation was accepted.'
+        Assert-True (Test-MiOpsTypedConfirmation -Action DELETE-SCHEDULE -ManagedInstanceName 'test-mi' -Confirmation 'DELETE SCHEDULE test-mi') 'Exact schedule deletion confirmation was rejected.'
+        Assert-True (-not (Test-MiOpsTypedConfirmation -Action DELETE-SCHEDULE -ManagedInstanceName 'test-mi' -Confirmation 'DELETE test-mi')) 'Incomplete schedule deletion confirmation was accepted.'
     }
 
     Test-Case 'mutation defaults to dry-run and exact approval is required' {
@@ -294,3 +297,5 @@ Write-Host "$script:passed passed; $script:failed failed"
 if ($script:failed -gt 0) {
     exit 1
 }
+
+& (Join-Path $PSScriptRoot 'plugin-tests.ps1')

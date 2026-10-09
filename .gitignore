@@ -35,6 +35,7 @@ coverage/
 # Agent runtime data
 .agent-state/
 .miops/
+.azure-sqlops/
 logs/
 artifacts/
 tmp/

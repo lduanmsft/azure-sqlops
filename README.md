@@ -6,6 +6,26 @@ Executable phase-1 operations toolkit for **one allowlisted existing Azure SQL M
 
 Azure SRE Agent is not an MVP dependency or prerequisite. It is only a possible future migration target.
 
+## Install as a GitHub Copilot CLI plugin
+
+In GitHub Copilot CLI:
+
+```text
+/plugin marketplace add lduanmsft/azure-sqlops
+/plugin install azure-sqlops@azure-sqlops
+```
+
+Then start `copilot` in the directory where local MI configuration and state should live and ask naturally, for example:
+
+```text
+登录 fdpo tenant，列出 MI，启动选中的实例
+调查这个 MI
+是否需要扩容
+生成支持工单草稿
+```
+
+The plugin bundles the same deterministic PowerShell backend used below; it does not rely on the current directory being this repository. See [GitHub Copilot CLI plugin usage](docs/copilot-cli-plugin.md) for update/uninstall commands, first-time setup, local file locations, and capability boundaries.
+
 ## Implemented phase-1 capabilities
 
 - Validate local configuration, Azure CLI login, active subscription, provider registration, and observable MI read access.
@@ -134,13 +154,21 @@ Local files are not an immutable enterprise audit sink. Protect the workstation 
 pwsh -NoProfile -File .\tests\run-tests.ps1
 ```
 
-Tests do not require Azure. They cover configuration validation, exact allowlisting, dry-run/approval safeguards, operation persistence, and redaction.
+Tests do not require Azure. They cover configuration validation, exact allowlisting, dry-run/approval safeguards, operation persistence, redaction, plugin manifests, skill discovery, bundled runtime paths, and source/package synchronization.
+
+When canonical runtime or skill files change, refresh the generated plugin package and verify it:
+
+```powershell
+pwsh -NoProfile -File .\scripts\sync-plugin.ps1
+pwsh -NoProfile -File .\scripts\sync-plugin.ps1 -Check
+```
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
 - [MVP scope and limitations](docs/mvp-scope.md)
 - [Security and governance](docs/security-and-governance.md)
+- [GitHub Copilot CLI plugin](docs/copilot-cli-plugin.md)
 - [Platform decision](docs/decision-log/0001-platform-strategy.md)
 - [Optional SQL diagnostics adapter contract](adapters/sql/README.md)
 

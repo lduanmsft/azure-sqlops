@@ -1,0 +1,21 @@
+{
+  "name": "azure-sqlops",
+  "description": "Operate one allowlisted Azure SQL Managed Instance conversationally through a deterministic local PowerShell and Azure CLI backend.",
+  "version": "1.0.0",
+  "author": {
+    "name": "lduanmsft",
+    "url": "https://github.com/lduanmsft"
+  },
+  "homepage": "https://github.com/lduanmsft/azure-sqlops",
+  "repository": "https://github.com/lduanmsft/azure-sqlops",
+  "license": "MIT",
+  "keywords": [
+    "azure",
+    "sql",
+    "managed-instance",
+    "operations",
+    "powershell",
+    "sre"
+  ],
+  "skills": "./skills/"
+}

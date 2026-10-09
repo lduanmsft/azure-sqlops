@@ -1,0 +1,33 @@
+{
+  "name": "azure-sqlops",
+  "owner": {
+    "name": "lduanmsft"
+  },
+  "metadata": {
+    "description": "Conversational, safety-gated Azure SQL Managed Instance operations for GitHub Copilot CLI.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "azure-sqlops",
+      "description": "Operate one allowlisted Azure SQL Managed Instance through a deterministic local PowerShell and Azure CLI backend.",
+      "version": "1.0.0",
+      "source": "./.github/plugins/azure-sqlops",
+      "author": {
+        "name": "lduanmsft",
+        "url": "https://github.com/lduanmsft"
+      },
+      "homepage": "https://github.com/lduanmsft/azure-sqlops",
+      "repository": "https://github.com/lduanmsft/azure-sqlops",
+      "license": "MIT",
+      "keywords": [
+        "azure",
+        "sql",
+        "managed-instance",
+        "operations",
+        "powershell",
+        "sre"
+      ]
+    }
+  ]
+}
