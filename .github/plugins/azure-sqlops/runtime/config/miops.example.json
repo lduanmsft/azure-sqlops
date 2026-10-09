@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "resource": {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example-rg/providers/Microsoft.Sql/managedInstances/example-mi",
+    "allowedResourceIds": [
+      "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example-rg/providers/Microsoft.Sql/managedInstances/example-mi"
+    ]
+  },
+  "azure": {
+    "managedInstanceApiVersion": "2023-08-01-preview",
+    "resourceHealthApiVersion": "2023-07-01-preview"
+  },
+  "safety": {
+    "defaultReadOnly": true,
+    "allowedLifecycleTiers": [
+      "GeneralPurpose"
+    ]
+  },
+  "evidence": {
+    "defaultLookbackHours": 24,
+    "metricNames": [
+      "avg_cpu_percent",
+      "storage_space_used_mb",
+      "io_bytes_read",
+      "io_bytes_written"
+    ]
+  },
+  "state": {
+    "directory": ".miops"
+  },
+  "sqlDiagnostics": {
+    "enabled": false,
+    "adapter": null,
+    "notes": "Optional adapter only. Azure RBAC does not grant SQL DMV or Query Store access."
+  },
+  "support": {
+    "submissionEnabled": false,
+    "notes": "Phase 1 generates drafts only. Support REST API entitlement varies by support plan and tenant."
+  }
+}
