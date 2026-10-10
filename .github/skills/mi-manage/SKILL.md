@@ -59,6 +59,8 @@ pwsh -NoProfile -File $miops preflight -DataRoot $dataRoot
 pwsh -NoProfile -File $miops status -DataRoot $dataRoot
 pwsh -NoProfile -File $miops database-list -DataRoot $dataRoot
 pwsh -NoProfile -File $miops backup-check -DataRoot $dataRoot
+pwsh -NoProfile -File $miops ltr-policy-show -DataRoot $dataRoot -Database 'test02'
+pwsh -NoProfile -File $miops ltr-policy-plan -DataRoot $dataRoot -Database 'test02' -WeeklyRetention 'P12W' -MonthlyRetention 'P12M' -YearlyRetention 'P5Y' -WeekOfYear 1
 pwsh -NoProfile -File $miops schedule-show -DataRoot $dataRoot
 pwsh -NoProfile -File $miops schedule-plan -DataRoot $dataRoot
 pwsh -NoProfile -File $miops operation-poll -DataRoot $dataRoot -OperationId '<local-operation-id>'
@@ -90,6 +92,74 @@ pwsh -NoProfile -File $miops backup-check -DataRoot $dataRoot -UseSqlHistory
 ```
 
 SQL history is disabled by default. When enabled in config it uses `sqlcmd` Microsoft Entra authentication, the fixed `backup-history-v1` read-only query, bounded timeout/rows, and no password/token configuration. Private networking, missing `sqlcmd`, and SQL permission failures are reported as evidence gaps.
+
+## LTR policy view, plan, and guarded apply
+
+Route these prompts deterministically:
+
+- `查看 dlinger/test02 的 LTR 策略` -> `ltr-policy-show -Database test02` for the exact allowlisted `dlinger` MI.
+- `计划为 test02 配置每周 12 周、每月 12 个月、每年 5 年，第 1 周` -> `ltr-policy-plan -Database test02 -WeeklyRetention P12W -MonthlyRetention P12M -YearlyRetention P5Y -WeekOfYear 1`.
+- `应用这个 LTR 策略` -> apply only the previously displayed exact normalized policy through `ltr-policy-apply`.
+
+The source MI must be an exact `resource.allowedResourceIds` member, and the database must exist exactly once in the reused non-system database inventory. Never infer an MI, database, subscription, or resource group from loose names.
+
+Accepted requested retention values are deliberately stricter than the Azure CLI's permissive parser:
+
+- One single-unit normalized duration: `P<n>D`, `P<n>W`, `P<n>M`, or `P<n>Y`.
+- Minimum 7 days. Deterministic maxima are `P3650D`, `P521W`, `P120M`, or `P10Y`.
+- Units are not restricted by policy dimension; the official MI REST example uses a monthly unit for weekly retention.
+- `PT0S` disables one dimension only. At least one dimension must remain enabled.
+- `WeekOfYear` must be 1-52 when yearly retention is enabled and 0 when yearly retention is `PT0S`.
+
+Reject bare numbers, mixed/compound units, time components, fractions, lowercase/whitespace variants, zero/negative quantities, shell fragments, JMESPath, and arbitrary ISO-8601 strings. Azure CLI itself accepts a bare number as days, but this runtime does not because the confirmation and audit policy must be unambiguous.
+
+Plan always reads and displays the current policy first. It returns the current and requested normalized values, exact MI/database/subscription, required confirmation, reduction classification, fixed CLI arguments, and cost/compliance/platform warnings. Planning never calls `set`.
+
+Apply requires:
+
+```powershell
+$mi = '/subscriptions/<subscription>/resourceGroups/<rg>/providers/Microsoft.Sql/managedInstances/<mi>'
+pwsh -NoProfile -File $miops ltr-policy-apply -DataRoot $dataRoot `
+  -Database 'test02' `
+  -WeeklyRetention 'P12W' `
+  -MonthlyRetention 'P12M' `
+  -YearlyRetention 'P5Y' `
+  -WeekOfYear 1 `
+  -Apply `
+  -ApproveResourceId $mi `
+  -TypedConfirmation 'SET LTR test02 WEEKLY P12W MONTHLY P12M YEARLY P5Y WEEK 1'
+```
+
+A conversational yes, tool approval, or menu number never satisfies the gate. The runtime submits only the fixed `az sql midb ltr-policy set` shape and explicitly includes all three retention dimensions; it does not rely on omitted CLI values. When yearly retention is disabled, `--week-of-year` is omitted and normalized to 0 for comparison.
+
+By default, apply blocks reducing a nonzero duration or changing an enabled dimension to `PT0S`. A reviewed exception requires both `-AllowRetentionReduction` and the stronger exact phrase:
+
+```text
+REDUCE LTR test02 WEEKLY P6W MONTHLY PT0S YEARLY P5Y WEEK 1
+```
+
+The reduction switch never permits all dimensions to be disabled. No delete, clear, reset, or disable-policy command exists.
+
+The runtime persists a redacted local operation and audit record before submission. Because `az sql midb ltr-policy set` is synchronous, it independently calls `show` afterward and uses **Verified** only when all normalized values exactly match. CLI exit 0 alone is not success.
+
+Always report:
+
+- Longer retention can increase Azure backup storage cost.
+- Policy changes apply to future retained backups; existing backups keep the retention assigned when created and are not necessarily deleted immediately.
+- The user must validate regulatory and organizational compliance requirements.
+- First visible LTR backup can take up to seven days.
+- SQL Managed Instance LTR backups cannot currently be configured as immutable.
+- LTR depends on successful automated full backups; transaction-log pressure or features that delay log truncation can delay LTR creation.
+- Azure remains authoritative for permissions, regional/platform availability, backup health, and failover behavior.
+
+Official references:
+
+- [Azure CLI `az sql midb ltr-policy`](https://learn.microsoft.com/cli/azure/sql/midb/ltr-policy)
+- [Managed Instance LTR policy create-or-update REST operation](https://learn.microsoft.com/rest/api/sql/managed-instance-long-term-retention-policies/create-or-update)
+- [Configure SQL Managed Instance LTR](https://learn.microsoft.com/azure/azure-sql/managed-instance/long-term-backup-retention-configure)
+- [LTR concepts and policy-change semantics](https://learn.microsoft.com/azure/azure-sql/database/long-term-retention-overview)
+
+The current Azure CLI reference marks both MI LTR policy commands as core GA, not preview. Microsoft documents no separate LTR-only region list; use is bounded by SQL Managed Instance availability and Azure-side backup/platform constraints in the selected region.
 
 ## Restore targets and PITR
 
@@ -135,7 +205,7 @@ Report provider, permission, configuration, or evidence gaps exactly. Do not inf
 
 ## Mutating commands
 
-`start`, `stop`, `schedule-delete`, and restore are dry-run/plan by default:
+`start`, `stop`, `schedule-delete`, restore, and LTR policy changes are dry-run/plan by default:
 
 ```powershell
 pwsh -NoProfile -File $miops start -DataRoot $dataRoot
@@ -169,7 +239,7 @@ Return the local operation ID and instruct polling. Use **Submitted** for CLI ac
 ## Prohibited
 
 - No provisioning, deletion, resize, failover, VM actions, arbitrary `az` commands, or T-SQL.
-- No database overwrite, system database restore, retention mutation, LTR deletion, native backup creation, or arbitrary SQL.
+- No database overwrite, system database restore, LTR policy clearing/deletion, LTR backup deletion, native backup creation, or arbitrary SQL.
 - No resource outside `allowedResourceIds`.
 - No restore target outside `restoreTargets.allowedResourceIds`.
 - Inventory output never changes `allowedResourceIds`.

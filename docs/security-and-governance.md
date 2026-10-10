@@ -11,6 +11,8 @@
 - Fixed Azure CLI command shapes rather than arbitrary shell input.
 - Local persistence before and after lifecycle submission.
 - Local persistence before PITR submission plus destination-state verification.
+- Local persistence before LTR submission plus exact normalized policy read-back.
+- Default LTR no-weakening policy with a separate switch and stronger `REDUCE LTR` confirmation.
 - Explicit `Submitted`, `InProgress`, `Verified`, and `Failed` distinctions.
 - Structured redaction for sensitive property names and bearer/token-like text.
 - Local JSONL audit records.
@@ -55,6 +57,18 @@ Restore apply additionally rejects:
 
 Azure still enforces supported cross-subscription types, primary-instance/primary-region rules, source backup availability, BYOK, service endpoint policies, capacity, locks, and permissions.
 
+LTR apply additionally rejects:
+
+- A source MI outside `resource.allowedResourceIds`.
+- A missing, system, unsafe, or non-exact database inventory match.
+- Bare numbers, arbitrary/compound ISO-8601 durations, shell/JMESPath fragments, time components, fractions, zero/negative values, values below 7 days, or values above 10 years.
+- Yearly retention without week 1-52, or a nonzero week while yearly retention is disabled.
+- An all-disabled policy.
+- Missing `-Apply`, mismatched `-ApproveResourceId`, or a phrase other than the full normalized `SET LTR ...`.
+- Retention reduction or dimension removal without both `-AllowRetentionReduction` and the full `REDUCE LTR ...` phrase.
+
+The runtime calls only the reviewed `az sql midb ltr-policy set` shape, explicitly supplies all three retention dimensions, persists a redacted record before submission, and independently reads the policy afterward. No delete/reset/clear command exists, and a successful CLI exit is not labeled verified without an exact match.
+
 The interactive menu additionally requires a case-sensitive `START <mi-name>` or `STOP <mi-name>` phrase after showing the exact name, resource ID, and observed state. Selecting a menu number never adds `-Apply`.
 
 ## Audit and state
@@ -90,6 +104,8 @@ Not all Microsoft Support plans or tenants permit the same API operations.
 ## Cost and budget governance
 
 Open-source code does not eliminate service cost. Establish budgets for Copilot/model use, MI uptime, metrics/log retention and queries, storage/networking, and Support. Phase 1 has no automatic cost enforcement; Azure Cost Management and organizational controls remain necessary.
+
+Longer LTR retention can increase backup storage charges. Policy changes apply to future retained backups, while existing backups retain their assigned expiration and are not necessarily deleted immediately. Operators remain responsible for compliance validation, recovery drills, failover policy parity, and the current Managed Instance limitation that LTR backups cannot be configured as immutable.
 
 ## Known limitations
 

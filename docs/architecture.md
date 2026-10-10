@@ -23,6 +23,8 @@ flowchart LR
     Module --> Draft[Support draft]
     Module --> Restore[PITR plan/apply/poll]
     Restore --> Az
+    Module --> LTR[LTR show/plan/guarded set/read-back]
+    LTR --> Az
     SQL[Optional fixed sqlcmd backup-history adapter] -. disabled by default .-> Module
 ```
 
@@ -36,7 +38,7 @@ Azure SRE Agent is not shown in the runtime because it is not required. A future
 |---|---|---|
 | `.github/skills/*/SKILL.md` | Canonical project-scoped Copilot discovery and safe command guidance | Implemented |
 | `miops.ps1` | Stable CLI command dispatcher | Implemented, locally tested |
-| `src/MiOps.psm1` and `src/MiOps.BackupRestore.ps1` | Setup, config/policy, Azure adapters, database/backup shaping, PITR planning/submission/polling, state, audit, evidence, support draft | Implemented, locally tested without Azure |
+| `src/MiOps.psm1`, `src/MiOps.BackupRestore.ps1`, and `src/MiOps.LtrPolicy.ps1` | Setup, config/policy, Azure adapters, database/backup shaping, LTR policy control, PITR planning/submission/polling, state, audit, evidence, support draft | Implemented, locally tested without Azure |
 | `config/miops.example.json` | Checked-in schema/example for one MI | Implemented |
 | `config/miops.local.json` | Operator-owned local configuration | Ignored |
 | `.miops/operations` | Durable local operation records | Implemented |
@@ -122,6 +124,32 @@ sequenceDiagram
 ```
 
 The target list is independent from source `allowedResourceIds`; inventory and discovery never populate it. Same-instance restore also requires explicit target configuration. `Verified` requires the destination database to be `Online` with successful provisioning.
+
+## LTR policy flow
+
+`ltr-policy-show`, `ltr-policy-plan`, and `ltr-policy-apply` reuse the exact source MI allowlist and user-database inventory. Requested values are closed to single-unit normalized durations (`P<n>D`, `P<n>W`, `P<n>M`, `P<n>Y`) or `PT0S` for one disabled dimension, with documented 7-day minimum, 10-year maximum, and week 1-52 validation. Units are not tied to the weekly/monthly/yearly selector; this follows the MI REST contract rather than Azure SQL Database assumptions.
+
+```mermaid
+sequenceDiagram
+    actor O as Operator
+    participant P as PowerShell policy
+    participant S as Local state/audit
+    participant A as Azure CLI/ARM
+
+    O->>P: ltr-policy-plan with full requested policy
+    P->>A: MI/database inventory + ltr-policy show
+    A-->>P: exact database and current policy
+    P->>P: normalize, reject all-disabled, classify weakening
+    P-->>O: current/requested values, warnings, exact phrase
+    O->>P: ltr-policy-apply + exact MI approval + typed phrase
+    P->>S: persist Ready/Submitting before mutation
+    P->>A: fixed ltr-policy set with all retention dimensions
+    A-->>P: synchronous CLI response
+    P->>A: independent ltr-policy show
+    P->>S: Verified only on exact normalized match
+```
+
+Normal changes use `SET LTR ...`. Any shorter retention or removal of an enabled dimension is blocked unless a separate reduction switch and full `REDUCE LTR ...` phrase are both present. No path clears all dimensions or deletes an LTR policy. All three retention dimensions are explicitly passed to `set`; the runtime does not depend on omitted-value behavior in Azure CLI's create-or-update implementation.
 
 ## Schedule boundary
 

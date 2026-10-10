@@ -9,6 +9,9 @@ param(
         'status',
         'database-list',
         'backup-check',
+        'ltr-policy-show',
+        'ltr-policy-plan',
+        'ltr-policy-apply',
         'configure-restore-target',
         'restore-plan',
         'restore-apply',
@@ -39,6 +42,11 @@ param(
     [string]$TargetManagedInstanceId,
     [string]$SourceDatabase,
     [string]$TargetDatabase,
+    [string]$Database,
+    [string]$WeeklyRetention,
+    [string]$MonthlyRetention,
+    [string]$YearlyRetention,
+    [int]$WeekOfYear,
     [string]$RestoreTimeUtc,
     [string]$ApproveManagedInstanceId,
     [string]$ApproveSourceResourceId,
@@ -47,6 +55,7 @@ param(
     [switch]$UseDeviceCode,
     [switch]$UseSqlHistory,
     [switch]$Apply,
+    [switch]$AllowRetentionReduction,
     [string]$ApproveResourceId,
     [string]$TypedConfirmation
 )
@@ -359,6 +368,64 @@ switch ($Command) {
     'backup-check' {
         $config = Get-MiOpsConfig -Path $resolvedConfigPath -RepositoryRoot $resolvedDataRoot
         Get-MiOpsBackupHealth -Config $config -ManagedInstanceId $ManagedInstanceId -UseSqlHistory:$UseSqlHistory
+    }
+    'ltr-policy-show' {
+        $config = Get-MiOpsConfig -Path $resolvedConfigPath -RepositoryRoot $resolvedDataRoot
+        if ([string]::IsNullOrWhiteSpace($Database)) {
+            throw '-Database is required for ltr-policy-show.'
+        }
+        Get-MiOpsLtrPolicy -Config $config -ManagedInstanceId $ManagedInstanceId -Database $Database
+    }
+    'ltr-policy-plan' {
+        $config = Get-MiOpsConfig -Path $resolvedConfigPath -RepositoryRoot $resolvedDataRoot
+        foreach ($required in @(
+            @{ name = '-Database'; value = $Database },
+            @{ name = '-WeeklyRetention'; value = $WeeklyRetention },
+            @{ name = '-MonthlyRetention'; value = $MonthlyRetention },
+            @{ name = '-YearlyRetention'; value = $YearlyRetention }
+        )) {
+            if ([string]::IsNullOrWhiteSpace([string]$required.value)) {
+                throw "$($required.name) is required for ltr-policy-plan."
+            }
+        }
+        Invoke-MiOpsLtrPolicy -Config $config -ManagedInstanceId $ManagedInstanceId -Database $Database `
+            -WeeklyRetention $WeeklyRetention -MonthlyRetention $MonthlyRetention `
+            -YearlyRetention $YearlyRetention -WeekOfYear $WeekOfYear
+    }
+    'ltr-policy-apply' {
+        $config = Get-MiOpsConfig -Path $resolvedConfigPath -RepositoryRoot $resolvedDataRoot
+        foreach ($required in @(
+            @{ name = '-Database'; value = $Database },
+            @{ name = '-WeeklyRetention'; value = $WeeklyRetention },
+            @{ name = '-MonthlyRetention'; value = $MonthlyRetention },
+            @{ name = '-YearlyRetention'; value = $YearlyRetention },
+            @{ name = '-ApproveResourceId'; value = $ApproveResourceId }
+        )) {
+            if ([string]::IsNullOrWhiteSpace([string]$required.value)) {
+                throw "$($required.name) is required for ltr-policy-apply."
+            }
+        }
+        if (-not $Apply) {
+            throw 'ltr-policy-apply requires the explicit -Apply switch. Use ltr-policy-plan for a non-mutating preview.'
+        }
+        $preview = Get-MiOpsLtrPolicyPlan -Config $config -ManagedInstanceId $ManagedInstanceId -Database $Database `
+            -WeeklyRetention $WeeklyRetention -MonthlyRetention $MonthlyRetention `
+            -YearlyRetention $YearlyRetention -WeekOfYear $WeekOfYear
+        Write-Host "Managed Instance: $($preview.managedInstanceName) | $($preview.managedInstanceId)"
+        Write-Host "Database: $Database | Subscription: $($preview.subscriptionId)"
+        Write-Host "Current: W=$($preview.currentPolicy.weeklyRetention), M=$($preview.currentPolicy.monthlyRetention), Y=$($preview.currentPolicy.yearlyRetention), Week=$($preview.currentPolicy.weekOfYear)"
+        Write-Host "Requested: W=$($preview.requestedPolicy.weeklyRetention), M=$($preview.requestedPolicy.monthlyRetention), Y=$($preview.requestedPolicy.yearlyRetention), Week=$($preview.requestedPolicy.weekOfYear)"
+        $confirmation = if ($TypedConfirmation) {
+            $TypedConfirmation
+        }
+        else {
+            Read-Host "Type '$($preview.requiredConfirmation)' to apply this exact policy"
+        }
+        Invoke-MiOpsLtrPolicy -Config $config -ManagedInstanceId $ManagedInstanceId -Database $Database `
+            -WeeklyRetention $WeeklyRetention -MonthlyRetention $MonthlyRetention `
+            -YearlyRetention $YearlyRetention -WeekOfYear $WeekOfYear -Apply `
+            -ApproveResourceId $ApproveResourceId -AllowRetentionReduction:$AllowRetentionReduction `
+            -TypedConfirmation $confirmation
     }
     'configure-restore-target' {
         $config = Get-MiOpsConfig -Path $resolvedConfigPath -RepositoryRoot $resolvedDataRoot

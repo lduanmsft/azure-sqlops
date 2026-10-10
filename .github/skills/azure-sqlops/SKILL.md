@@ -15,13 +15,16 @@ Use this skill for prompts such as:
 - "列出所有 MI"
 - "列出 dlinger 的数据库和状态"
 - "检查 dlinger 是否有异常备份记录"
+- "查看 dlinger/test02 的 LTR 策略"
+- "计划为 test02 配置每周 12 周、每月 12 个月、每年 5 年，第 1 周"
+- "应用这个 LTR 策略"
 - "把 db1 恢复到 2026-10-10T01:00:00Z，目标名 db1-restore"
 - "把 dlinger/db1 恢复到 lduan-mi-sea/db1-restore"
 - "调查这个 MI"
 - "是否需要扩容"
 - "生成支持工单草稿"
 
-Route setup, inventory, database inventory, backup health, PITR planning/apply, status, start/stop, schedule, and operation polling to `mi-manage`; read-only incident investigation to `mi-troubleshoot`; capacity recommendations to `mi-capacity`; and local Support draft generation to `mi-escalate`.
+Route setup, inventory, database inventory, backup health, LTR policy viewing/planning/guarded apply, PITR planning/apply, status, start/stop, schedule, and operation polling to `mi-manage`; read-only incident investigation to `mi-troubleshoot`; capacity recommendations to `mi-capacity`; and local Support draft generation to `mi-escalate`.
 
 Inventory routing is explicit:
 
@@ -33,6 +36,9 @@ Database and restore routing is explicit:
 
 - "列出 dlinger 的数据库和状态" -> `database-list`
 - "检查 dlinger 是否有异常备份记录" -> `backup-check`
+- "查看 dlinger/test02 的 LTR 策略" -> `ltr-policy-show -Database test02` for the exact allowlisted `dlinger` MI
+- "计划为 test02 配置每周 12 周、每月 12 个月、每年 5 年，第 1 周" -> `ltr-policy-plan -Database test02 -WeeklyRetention P12W -MonthlyRetention P12M -YearlyRetention P5Y -WeekOfYear 1`
+- "应用这个 LTR 策略" -> `ltr-policy-apply` only after showing the exact plan and receiving all deterministic safeguards
 - PITR request -> `restore-plan` first, then `restore-apply` only after all deterministic approval gates
 - Restore target onboarding -> `CONFIGURE RESTORE TARGET <mi-name>`
 - Restore submission -> `RESTORE <source-db> TO <target-mi>/<target-db> AT <timestamp>`
@@ -75,6 +81,8 @@ Use only this validated repository-root `miops.ps1`; do not search parent direct
 - Before lifecycle apply, show the exact MI name, resource ID, and current state and require the operator to type `START <mi-name>` or `STOP <mi-name>`. Schedule deletion requires `DELETE SCHEDULE <mi-name>`. A conversational "yes", tool approval, or menu selection does not satisfy this gate.
 - Persist and return the local operation ID. Call an operation verified only after `operation-poll` observes the desired resource state.
 - Restore is plan-only by default. Apply requires exact source and target resource approvals plus `RESTORE <source-db> TO <target-mi>/<target-db> AT <timestamp>`.
+- LTR policy apply requires `-Apply`, the exact source MI `-ApproveResourceId`, and `SET LTR <db> WEEKLY <w> MONTHLY <m> YEARLY <y> WEEK <n>`. A reduction or dimension removal additionally requires `-AllowRetentionReduction` and the same full phrase beginning with `REDUCE LTR`.
+- LTR accepts only `PT0S` for an individually disabled dimension or strict single-unit `P<n>D`, `P<n>W`, `P<n>M`, and `P<n>Y` values from 7 days through 10 years. It never supports clearing all dimensions or deleting LTR policies.
 - The optional SQL backup-history adapter accepts no SQL text. It runs only the fixed `backup-history-v1` read-only query through `sqlcmd -G`.
-- Do not provision, delete, overwrite, resize, fail over, perform VM actions, run arbitrary Azure CLI commands or T-SQL, change retention, delete LTR backups, or submit a Support request.
+- Do not provision, delete, overwrite, resize, fail over, perform VM actions, run arbitrary Azure CLI commands or T-SQL, clear/delete LTR policies, delete LTR backups, or submit a Support request.
 - Do not claim Azure MCP Managed Instance lifecycle support or tenant validation.

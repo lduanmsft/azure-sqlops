@@ -1398,6 +1398,7 @@ function Get-MiOpsSqlAdapterStatus {
 }
 
 . (Join-Path $PSScriptRoot 'MiOps.BackupRestore.ps1')
+. (Join-Path $PSScriptRoot 'MiOps.LtrPolicy.ps1')
 
 Export-ModuleMember -Function @(
     'Get-MiOpsConfig',
@@ -1444,6 +1445,15 @@ Export-ModuleMember -Function @(
     'Invoke-MiOpsRestore',
     'Update-MiOpsRestoreOperation',
     'Get-MiOpsRestorePollState',
+    'ConvertTo-MiOpsLtrRetention',
+    'ConvertTo-MiOpsLtrPolicy',
+    'New-MiOpsLtrRequestedPolicy',
+    'Test-MiOpsLtrPolicyReduction',
+    'Test-MiOpsLtrConfirmation',
+    'Get-MiOpsLtrPolicy',
+    'Get-MiOpsLtrPolicyPlan',
+    'Test-MiOpsLtrPolicyMatch',
+    'Invoke-MiOpsLtrPolicy',
     'Test-MiOpsLongTermRetentionConfigured',
     'Get-MiOpsBackupFindings',
     'Get-MiOpsBackupHealth',
