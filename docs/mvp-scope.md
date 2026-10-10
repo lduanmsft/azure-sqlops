@@ -4,7 +4,7 @@
 
 ## Runtime decision
 
-Phase 1 uses local GitHub Copilot CLI, public/open-source skill definitions, PowerShell 7, and Azure CLI/ARM. Azure SRE Agent is neither required nor included.
+Phase 1 uses local GitHub Copilot CLI, project-scoped skill definitions in `.github/skills`, PowerShell 7, and Azure CLI/ARM. Azure SRE Agent is neither required nor included.
 
 ## Implemented
 

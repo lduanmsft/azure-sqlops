@@ -7,7 +7,7 @@
 ```mermaid
 flowchart LR
     Operator[Operator] --> Copilot[Local GitHub Copilot CLI]
-    Copilot --> Skills[Public SKILL.md guidance]
+    Copilot --> Skills[Project skills in .github/skills]
     Skills --> Script[miops.ps1]
     Script --> Setup[Tenant login, subscription and MI selection]
     Script --> Module[MiOps PowerShell module]
@@ -32,6 +32,7 @@ Azure SRE Agent is not shown in the runtime because it is not required. A future
 
 | Component | Responsibility | Status |
 |---|---|---|
+| `.github/skills/*/SKILL.md` | Canonical project-scoped Copilot discovery and safe command guidance | Implemented |
 | `miops.ps1` | Stable CLI command dispatcher | Implemented, locally tested |
 | `src/MiOps.psm1` | Setup validation/selection, config, policy, Azure adapters, state, audit, evidence, support draft | Implemented, locally tested without Azure |
 | `config/miops.example.json` | Checked-in schema/example for one MI | Implemented |

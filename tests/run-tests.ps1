@@ -405,4 +405,4 @@ if ($script:failed -gt 0) {
     exit 1
 }
 
-& (Join-Path $PSScriptRoot 'plugin-tests.ps1')
+& (Join-Path $PSScriptRoot 'project-skills-tests.ps1')

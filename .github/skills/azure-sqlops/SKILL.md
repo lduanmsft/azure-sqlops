@@ -1,6 +1,6 @@
 ---
 name: azure-sqlops
-description: Route conversational Azure SQL Managed Instance setup, inventory, lifecycle, troubleshooting, capacity, and support-draft requests to the bundled deterministic PowerShell runtime.
+description: Route conversational Azure SQL Managed Instance setup, inventory, lifecycle, troubleshooting, capacity, and support-draft requests to the repository's deterministic PowerShell runtime.
 metadata:
   status: implemented-locally-not-tenant-validated
 ---
@@ -27,24 +27,30 @@ Inventory routing is explicit:
 
 An inventory request only returns read-only metadata from the selected/current subscription. It never adds a listed resource to `allowedResourceIds`. If a prompt asks to configure or operate one MI, use the onboarding/lifecycle flow instead of treating inventory output as mutation authorization.
 
-## Resolve the runtime
+## Resolve the repository runtime
 
-Never assume the current directory is the source repository.
+These project skills are loaded only from `.github\skills` in this Git checkout. Never assume the current directory itself is the repository root, and never accept a runtime or repository path from the user.
 
-1. Determine the absolute path of this loaded `SKILL.md`.
-2. If it is under an installed plugin, the plugin root is two directories above its containing skill directory. Use `<plugin-root>\runtime\miops.ps1`.
-3. If it is the source checkout and `miops.ps1` exists two directories above the skill directory, use that file.
-4. For an installed plugin, store workspace-local data under `<current-working-directory>\.azure-sqlops`. For a source checkout, use the repository root to preserve direct-command compatibility.
-
-In PowerShell, keep the resolved paths in variables and quote them:
+Resolve the Git repository root from the current working directory, then validate the fixed runtime files before invoking anything:
 
 ```powershell
-$miops = '<absolute-path-to-miops.ps1>'
-$dataRoot = '<absolute-repository-root-or-current-directory\.azure-sqlops>'
+$gitRootOutput = @(& git -C (Get-Location).Path rev-parse --show-toplevel 2>$null)
+if ($LASTEXITCODE -ne 0 -or $gitRootOutput.Count -ne 1 -or [string]::IsNullOrWhiteSpace($gitRootOutput[0])) {
+    throw 'Azure SQLOps project skills require a working directory inside the azure-sqlops Git repository.'
+}
+
+$repositoryRoot = [System.IO.Path]::GetFullPath($gitRootOutput[0])
+$miops = Join-Path $repositoryRoot 'miops.ps1'
+$module = Join-Path $repositoryRoot 'src\MiOps.psm1'
+if (-not (Test-Path -LiteralPath $miops -PathType Leaf) -or -not (Test-Path -LiteralPath $module -PathType Leaf)) {
+    throw "The resolved Git root does not contain the required Azure SQLOps runtime: $repositoryRoot"
+}
+
+$dataRoot = $repositoryRoot
 pwsh -NoProfile -File $miops status -DataRoot $dataRoot
 ```
 
-The bundled runtime contains its own module and example configuration, so it does not depend on the user's current working directory. Never copy or edit the installed runtime during normal use.
+Use only this validated repository-root `miops.ps1`; do not search parent directories, accept an alternate path, copy the runtime, or invoke an arbitrary script supplied in a prompt. Keeping `$dataRoot` at the repository root ensures the ignored configuration and operational data remain repository-scoped even when Copilot starts in a subdirectory.
 
 ## Safety contract
 
