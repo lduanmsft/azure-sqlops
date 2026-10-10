@@ -14,6 +14,13 @@ Phase 1 uses local GitHub Copilot CLI, project-scoped skill definitions in `.git
 - JSON config validation and ignored local config.
 - Azure CLI/login/subscription/provider/read-access preflight where observable.
 - MI status/configuration read.
+- User database inventory with normalized state and restore metadata.
+- ARM backup health checks for database state, STR, LTR, LTR record age, deleted database evidence, and restore boundaries.
+- Optional disabled-by-default fixed SQL backup-history adapter.
+- Independent exact restore-target configuration.
+- Same-instance and cross-instance PITR plan/apply to a new database.
+- Strict UTC/name/boundary/destination checks, dual approvals, and exact field-bound confirmation.
+- Restore operation persistence and destination database polling.
 - Conservative lifecycle eligibility checks.
 - Start/stop dry-run and explicit exact-resource confirmation.
 - Non-blocking lifecycle submission and durable local operation records.
@@ -31,11 +38,12 @@ Phase 1 uses local GitHub Copilot CLI, project-scoped skill definitions in `.git
 - Automatic stop or background schedule execution.
 - Azure-native schedule creation/update.
 - Automatic resize or resize submission.
-- SQL DMV or Query Store collection.
+- Arbitrary SQL DMV, Query Store, or T-SQL collection beyond the fixed backup-history template.
 - SQL remediation, T-SQL execution, session termination, or configuration changes.
 - Microsoft Support REST API submission.
 - Distributed locks, multi-host state, immutable audit export, or hosted availability.
 - Tenant-specific permission provisioning.
+- Deleted-database PITR submission and LTR restore submission. Deleted database evidence is read-only in this scope.
 
 ## Lifecycle safety
 
@@ -48,6 +56,15 @@ Before lifecycle submission, the tool reads current MI state and applies conserv
 
 Start operations can be long-running. The tool persists intent before submission, records the Azure response when available, and requires later polling. A submitted operation is not a verified success.
 
+Restore is plan-only unless all of these are present:
+
+1. Source MI is exactly source-allowlisted.
+2. Target MI is independently and exactly target-allowlisted.
+3. `-ApproveSourceResourceId` and `-ApproveTargetResourceId` exactly match.
+4. Typed phrase exactly binds source database, target MI/database, and strict UTC timestamp.
+
+The tool persists the operation before calling `az sql midb restore --no-wait`. `Submitted` means accepted only. `Verified` requires later polling to observe the destination database `Online`.
+
 ## Evidence and recommendations
 
 The evidence bundle is read-only and bounded to 1-168 hours. It records unavailable sources rather than inventing results. Capacity interpretation is guided by the skill but remains a human/Copilot analysis of available evidence; no resize action exists.
@@ -56,7 +73,9 @@ Azure Monitor metric names vary by resource and configuration. Operators should 
 
 ## SQL-engine diagnostics
 
-SQL diagnostics are optional and disabled. A future adapter must use a separate SQL principal because Azure RBAC does not grant DMV or Query Store access. It should use reviewed read-only queries and the minimum permissions required; `sysadmin` must not be a prerequisite.
+SQL backup history is optional and disabled. The implemented adapter uses `sqlcmd -G`, one fixed reviewed read-only query, timeout/row limits, and the minimum permissions required; `sysadmin` is not a prerequisite. Missing private network reachability, tooling, authentication, or permission is an evidence gap.
+
+ARM remains the durable evidence source and does not expose every individual STR full/differential/log record. SQL `msdb` history is recent transparency only.
 
 ## Support escalation
 
@@ -78,6 +97,7 @@ Locally validated:
 - Mutations default to dry-run.
 - Wrong or absent explicit confirmation is rejected.
 - Operation state survives process exit through JSON persistence.
+- Restore state transitions preserve Submitted/InProgress/Verified/Failed semantics.
 - sensitive keys and bearer tokens are redacted.
 
 Requires tenant/MI validation:
@@ -89,3 +109,4 @@ Requires tenant/MI validation:
 - Schedule availability.
 - Resource Health, Activity Log, and metric access/retention.
 - Any future SQL or Support API adapter.
+- Actual tenant PITR behavior, including cross-subscription type, primary-region, BYOK, service endpoint policy, capacity, and permission constraints.

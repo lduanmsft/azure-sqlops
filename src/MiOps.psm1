@@ -70,6 +70,84 @@ function Get-MiOpsConfig {
         }
     }
 
+    if (-not $config.ContainsKey('restoreTargets')) {
+        $config.restoreTargets = @{ allowedResourceIds = @() }
+    }
+    if (-not $config.restoreTargets.ContainsKey('allowedResourceIds')) {
+        $config.restoreTargets.allowedResourceIds = @()
+    }
+    foreach ($resourceId in @($config.restoreTargets.allowedResourceIds)) {
+        if ($resourceId -notmatch $resourceIdPattern) {
+            throw "Invalid restore target Managed Instance resource ID: $resourceId"
+        }
+    }
+
+    if (-not $config.ContainsKey('backupHealth')) {
+        $config.backupHealth = @{}
+    }
+    $backupDefaults = @{
+        minimumShortTermRetentionDays = 7
+        requireLongTermRetention = $false
+        maximumLatestLongTermBackupAgeDays = 8
+        maximumFullBackupAgeHours = 192
+        maximumDifferentialBackupAgeHours = 48
+        maximumLogBackupAgeMinutes = 30
+    }
+    foreach ($key in $backupDefaults.Keys) {
+        if (-not $config.backupHealth.ContainsKey($key)) {
+            $config.backupHealth[$key] = $backupDefaults[$key]
+        }
+    }
+    if ([int]$config.backupHealth.minimumShortTermRetentionDays -lt 1 -or [int]$config.backupHealth.minimumShortTermRetentionDays -gt 35) {
+        throw 'backupHealth.minimumShortTermRetentionDays must be between 1 and 35.'
+    }
+    if ($config.backupHealth.requireLongTermRetention -isnot [bool]) {
+        throw 'backupHealth.requireLongTermRetention must be true or false.'
+    }
+    if ([int]$config.backupHealth.maximumLatestLongTermBackupAgeDays -lt 1 -or [int]$config.backupHealth.maximumLatestLongTermBackupAgeDays -gt 3650) {
+        throw 'backupHealth.maximumLatestLongTermBackupAgeDays must be between 1 and 3650.'
+    }
+    if ([int]$config.backupHealth.maximumFullBackupAgeHours -lt 1 -or [int]$config.backupHealth.maximumFullBackupAgeHours -gt 87600) {
+        throw 'backupHealth.maximumFullBackupAgeHours must be between 1 and 87600.'
+    }
+    if ([int]$config.backupHealth.maximumDifferentialBackupAgeHours -lt 1 -or [int]$config.backupHealth.maximumDifferentialBackupAgeHours -gt 8760) {
+        throw 'backupHealth.maximumDifferentialBackupAgeHours must be between 1 and 8760.'
+    }
+    if ([int]$config.backupHealth.maximumLogBackupAgeMinutes -lt 1 -or [int]$config.backupHealth.maximumLogBackupAgeMinutes -gt 10080) {
+        throw 'backupHealth.maximumLogBackupAgeMinutes must be between 1 and 10080.'
+    }
+
+    if (-not $config.ContainsKey('sqlDiagnostics')) {
+        $config.sqlDiagnostics = @{}
+    }
+    $sqlDefaults = @{
+        enabled = $false
+        adapter = 'sqlcmd-entra'
+        connectTimeoutSeconds = 15
+        queryTimeoutSeconds = 30
+        maxRows = 1000
+    }
+    foreach ($key in $sqlDefaults.Keys) {
+        if (-not $config.sqlDiagnostics.ContainsKey($key) -or $null -eq $config.sqlDiagnostics[$key]) {
+            $config.sqlDiagnostics[$key] = $sqlDefaults[$key]
+        }
+    }
+    if ($config.sqlDiagnostics.enabled -isnot [bool]) {
+        throw 'sqlDiagnostics.enabled must be true or false.'
+    }
+    if ([string]$config.sqlDiagnostics.adapter -ne 'sqlcmd-entra') {
+        throw "sqlDiagnostics.adapter must be 'sqlcmd-entra'."
+    }
+    if ([int]$config.sqlDiagnostics.connectTimeoutSeconds -lt 1 -or [int]$config.sqlDiagnostics.connectTimeoutSeconds -gt 60) {
+        throw 'sqlDiagnostics.connectTimeoutSeconds must be between 1 and 60.'
+    }
+    if ([int]$config.sqlDiagnostics.queryTimeoutSeconds -lt 1 -or [int]$config.sqlDiagnostics.queryTimeoutSeconds -gt 120) {
+        throw 'sqlDiagnostics.queryTimeoutSeconds must be between 1 and 120.'
+    }
+    if ([int]$config.sqlDiagnostics.maxRows -lt 1 -or [int]$config.sqlDiagnostics.maxRows -gt 1000) {
+        throw 'sqlDiagnostics.maxRows must be between 1 and 1000.'
+    }
+
     if (-not (Test-MiOpsResourceAllowed -Config $config -ResourceId $config.resource.id)) {
         throw 'resource.id is not present in resource.allowedResourceIds.'
     }
@@ -93,6 +171,7 @@ function Get-MiOpsConfig {
 
     $config.state.directory = [System.IO.Path]::GetFullPath($stateDirectory)
     $config['_configPath'] = [System.IO.Path]::GetFullPath($Path)
+    $config['_repositoryRoot'] = [System.IO.Path]::GetFullPath($RepositoryRoot)
     return $config
 }
 
@@ -887,6 +966,9 @@ function Update-MiOpsOperation {
     )
 
     $operation = Get-MiOpsOperation -Config $Config -OperationId $OperationId
+    if ([string]$operation.action -eq 'restore') {
+        return Update-MiOpsRestoreOperation -Config $Config -Operation $operation
+    }
     if (-not (Test-MiOpsResourceAllowed -Config $Config -ResourceId $operation.resourceId)) {
         throw "Operation target is no longer allowlisted: $($operation.resourceId)"
     }
@@ -1303,11 +1385,19 @@ function Get-MiOpsSqlAdapterStatus {
     return [pscustomobject]@{
         enabled = [bool]$Config.sqlDiagnostics.enabled
         adapter = $Config.sqlDiagnostics.adapter
-        implemented = $false
-        requiredBoundary = 'Use a separate least-privilege SQL identity and reviewed read-only DMV/Query Store queries. Do not require sysadmin.'
-        note = 'Phase 1 does not fabricate or infer SQL-engine diagnostics from Azure control-plane evidence.'
+        implemented = $true
+        queryTemplates = @('backup-history-v1')
+        requiredBoundary = 'Uses sqlcmd with Microsoft Entra authentication and one fixed read-only msdb backup-history query. No password, token, connection string, or arbitrary T-SQL input is accepted.'
+        note = if ($Config.sqlDiagnostics.enabled) {
+            'The adapter is enabled. Network reachability and minimum SQL SELECT permissions are still required and are reported as evidence gaps when unavailable.'
+        }
+        else {
+            'The adapter is disabled by default. Azure control-plane backup evidence remains available without SQL connectivity.'
+        }
     }
 }
+
+. (Join-Path $PSScriptRoot 'MiOps.BackupRestore.ps1')
 
 Export-ModuleMember -Function @(
     'Get-MiOpsConfig',
@@ -1341,6 +1431,23 @@ Export-ModuleMember -Function @(
     'Get-MiOpsSchedule',
     'New-MiOpsSchedulePlan',
     'Remove-MiOpsSchedule',
+    'Get-MiOpsResourceParts',
+    'Test-MiOpsSystemDatabase',
+    'ConvertTo-MiOpsDatabaseItems',
+    'Get-MiOpsDatabaseList',
+    'Test-MiOpsUtcTimestamp',
+    'Test-MiOpsDatabaseName',
+    'Test-MiOpsRestoreTargetAllowed',
+    'Add-MiOpsRestoreTarget',
+    'Test-MiOpsRestoreConfirmation',
+    'Get-MiOpsRestorePlan',
+    'Invoke-MiOpsRestore',
+    'Update-MiOpsRestoreOperation',
+    'Get-MiOpsRestorePollState',
+    'Test-MiOpsLongTermRetentionConfigured',
+    'Get-MiOpsBackupFindings',
+    'Get-MiOpsBackupHealth',
+    'Invoke-MiOpsSqlBackupHistory',
     'Get-MiOpsEvidence',
     'New-MiOpsSupportDraft',
     'Get-MiOpsSqlAdapterStatus'

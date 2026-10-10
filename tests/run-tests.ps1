@@ -395,6 +395,268 @@ try {
             Update-MiOpsOperation -Config $config -OperationId 'dry-run-operation'
         } 'Dry-run operation was allowed to enter verification polling.'
     }
+
+    Test-Case 'database shaping tolerates Azure CLI schema differences' {
+        $items = @(ConvertTo-MiOpsDatabaseItems -Databases @(
+            [pscustomobject]@{
+                name = 'db1'
+                state = 'Online'
+                creationDateTime = '2026-10-01T00:00:00Z'
+                sourceDatabaseResourceId = '/source/db'
+                id = "$resourceId/databases/db1"
+            }
+        ))
+        Assert-True ($items[0].status -eq 'Online') 'Database state fallback was not used.'
+        Assert-True ($items[0].creationDate -eq '2026-10-01T00:00:00Z') 'Creation date schema fallback was not used.'
+        Assert-True ($items[0].sourceDatabaseId -eq '/source/db') 'Source database schema fallback was not used.'
+    }
+
+    Test-Case 'database inventory reports stopped instance without querying databases' {
+        $calls = [System.Collections.Generic.List[string]]::new()
+        $config = $baseConfig.Clone()
+        $config.state = @{ directory = Join-Path $tempRoot 'stopped-instance-state' }
+        $invoker = {
+            param([string[]]$Arguments, [bool]$AllowEmpty)
+            $calls.Add(($Arguments -join ' '))
+            return [pscustomobject]@{ id = $resourceId; state = 'Stopped'; provisioningState = 'Succeeded' }
+        }
+        $result = Get-MiOpsDatabaseList -Config $config -AzInvoker $invoker
+        Assert-True (-not $result.available) 'Stopped instance was reported as available.'
+        Assert-True ($calls.Count -eq 1) 'Database list was queried for a stopped instance.'
+        Assert-True ($result.evidenceGaps[0] -like '*Stopped*') 'Stopped state was not reported explicitly.'
+    }
+
+    Test-Case 'backup threshold configuration is validated' {
+        $path = Join-Path $tempRoot 'invalid-backup-threshold.json'
+        $invalid = $baseConfig.Clone()
+        $invalid.backupHealth = @{ minimumShortTermRetentionDays = 36 }
+        $invalid | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $path
+        Assert-ThrowsLike {
+            Get-MiOpsConfig -Path $path -RepositoryRoot $tempRoot
+        } '*minimumShortTermRetentionDays must be between 1 and 35*' 'Invalid STR threshold was accepted.'
+    }
+
+    Test-Case 'strict UTC timestamps reject offsets local time and future values' {
+        Assert-True (Test-MiOpsUtcTimestamp -Timestamp '2026-10-10T01:00:00Z') 'Valid UTC timestamp was rejected.'
+        Assert-True (Test-MiOpsUtcTimestamp -Timestamp '2026-10-10T01:00:00.123Z') 'Valid fractional UTC timestamp was rejected.'
+        Assert-True (-not (Test-MiOpsUtcTimestamp -Timestamp '2026-10-10T01:00:00+08:00')) 'Offset timestamp was accepted.'
+        Assert-True (-not (Test-MiOpsUtcTimestamp -Timestamp '2026-10-10 01:00:00')) 'Non-ISO local timestamp was accepted.'
+    }
+
+    Test-Case 'system and unsafe database names are rejected' {
+        foreach ($name in @('master', 'model', 'msdb', 'tempdb')) {
+            Assert-True (-not (Test-MiOpsDatabaseName -Name $name)) "System database '$name' was accepted."
+        }
+        Assert-True (Test-MiOpsDatabaseName -Name 'db1-restore') 'Safe destination name was rejected.'
+        Assert-True (-not (Test-MiOpsDatabaseName -Name 'db1/restore')) 'Unsafe destination name was accepted.'
+    }
+
+    Test-Case 'restore target allowlist comparison is exact' {
+        $targetId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test-rg/providers/Microsoft.Sql/managedInstances/target-mi'
+        $config = $baseConfig.Clone()
+        $config.restoreTargets = @{ allowedResourceIds = @($targetId) }
+        Assert-True (Test-MiOpsRestoreTargetAllowed -Config $config -ResourceId $targetId.ToUpperInvariant()) 'Exact target allowlist match failed.'
+        Assert-True (-not (Test-MiOpsRestoreTargetAllowed -Config $config -ResourceId "$targetId-extra")) 'Target allowlist accepted a prefix match.'
+    }
+
+    Test-Case 'restore target configuration requires exact phrase and persists only the requested target' {
+        $targetId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/target-rg/providers/Microsoft.Sql/managedInstances/target-mi'
+        $path = Join-Path $tempRoot 'configure-target.json'
+        $baseConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $path
+        $config = Get-MiOpsConfig -Path $path -RepositoryRoot $tempRoot
+        $invoker = {
+            param([string[]]$Arguments, [bool]$AllowEmpty)
+            return [pscustomobject]@{ id = $targetId; name = 'target-mi'; state = 'Ready'; provisioningState = 'Succeeded' }
+        }
+        Assert-ThrowsLike {
+            Add-MiOpsRestoreTarget -Config $config -TargetManagedInstanceId $targetId -TypedConfirmation 'yes' -AzInvoker $invoker
+        } '*CONFIGURE RESTORE TARGET target-mi*' 'Conversational target configuration approval was accepted.'
+        $updated = Add-MiOpsRestoreTarget -Config $config -TargetManagedInstanceId $targetId `
+            -TypedConfirmation 'CONFIGURE RESTORE TARGET target-mi' -AzInvoker $invoker
+        Assert-True ($updated.restoreTargets.allowedResourceIds.Count -eq 1) 'Unexpected restore targets were persisted.'
+        Assert-True ($updated.restoreTargets.allowedResourceIds[0] -eq $targetId) 'Requested restore target was not persisted exactly.'
+        Assert-True ($updated.resource.allowedResourceIds.Count -eq 1) 'Source allowlist changed while configuring a restore target.'
+    }
+
+    Test-Case 'backup anomaly rules separate warnings from insufficient evidence' {
+        $now = [DateTimeOffset]'2026-10-10T12:00:00Z'
+        $result = Get-MiOpsBackupFindings `
+            -Database ([pscustomobject]@{ name = 'db1'; status = 'Restoring' }) `
+            -ShortTermPolicy ([pscustomobject]@{ retentionDays = 5 }) `
+            -LongTermPolicy ([pscustomobject]@{ weeklyRetention = 'P4W'; monthlyRetention = 'P0D'; yearlyRetention = 'P0D' }) `
+            -LongTermBackups @([pscustomobject]@{ backupTime = '2026-09-01T00:00:00Z' }) `
+            -SqlHistory ([pscustomobject]@{
+                latestFullBackupUtc = '2026-10-01T00:00:00Z'
+                latestDifferentialBackupUtc = $null
+                latestLogBackupUtc = '2026-10-10T10:00:00Z'
+            }) `
+            -Thresholds @{
+                minimumShortTermRetentionDays = 7
+                requireLongTermRetention = $true
+                maximumLatestLongTermBackupAgeDays = 8
+                maximumFullBackupAgeHours = 192
+                maximumDifferentialBackupAgeHours = 48
+                maximumLogBackupAgeMinutes = 30
+            } -EvidenceGaps @('LTR permission unavailable.') -NowUtc $now
+        Assert-True (@($result.findings | Where-Object code -eq 'database-not-online').Count -eq 1) 'Non-online database warning was missing.'
+        Assert-True (@($result.findings | Where-Object code -eq 'str-retention-below-threshold').Count -eq 1) 'STR threshold warning was missing.'
+        Assert-True (@($result.findings | Where-Object code -eq 'ltr-latest-too-old').Count -eq 1) 'Stale LTR warning was missing.'
+        Assert-True (@($result.findings | Where-Object severity -eq 'insufficient-evidence').Count -ge 2) 'Evidence gaps were not separated from warnings.'
+    }
+
+    Test-Case 'SQL backup adapter uses fixed Entra query without secrets' {
+        $config = $baseConfig.Clone()
+        $config.sqlDiagnostics = @{
+            enabled = $true
+            adapter = 'sqlcmd-entra'
+            connectTimeoutSeconds = 15
+            queryTimeoutSeconds = 30
+            maxRows = 100
+        }
+        $config.state = @{ directory = Join-Path $tempRoot 'sql-adapter-state' }
+        $captured = $null
+        $invoker = {
+            param($Executable, [string[]]$Arguments)
+            $script:capturedSqlArguments = $Arguments
+            return 'db1|2026-10-10T00:00:00|2026-10-10T06:00:00|2026-10-10T11:50:00'
+        }
+        $result = Invoke-MiOpsSqlBackupHistory -Config $config -Server 'test-mi.public.example' -SqlInvoker $invoker
+        $joined = $script:capturedSqlArguments -join ' '
+        Assert-True ($result.included) 'SQL adapter did not return parsed evidence.'
+        Assert-True ($result.rows[0].database -eq 'db1') 'SQL adapter did not parse the fixed result shape.'
+        Assert-True ($joined -match ' -G ') 'Microsoft Entra authentication flag was not used.'
+        Assert-True ($joined -notmatch '(?i)(password|access[_-]?token|client[_-]?secret)') 'SQL adapter arguments contained a secret input.'
+        Assert-True ($joined -match 'TOP \(100\)') 'Configured SQL row limit was not embedded in the fixed query.'
+    }
+
+    Test-Case 'restore plan rejects an existing destination database' {
+        $targetId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/target-rg/providers/Microsoft.Sql/managedInstances/target-mi'
+        $path = Join-Path $tempRoot 'restore-existing.json'
+        $restoreConfig = $baseConfig.Clone()
+        $restoreConfig.restoreTargets = @{ allowedResourceIds = @($targetId) }
+        $restoreConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $path
+        $restoreConfig = Get-MiOpsConfig -Path $path -RepositoryRoot $tempRoot
+        $restoreTime = [DateTimeOffset]::UtcNow.AddHours(-1).ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $earliest = [DateTimeOffset]::UtcNow.AddDays(-7).ToString('o')
+        $invoker = {
+            param([string[]]$Arguments, [bool]$AllowEmpty)
+            $joined = $Arguments -join ' '
+            if ($joined -eq "sql mi show --ids $resourceId") {
+                return [pscustomobject]@{ id = $resourceId; name = 'test-mi'; location = 'eastus'; state = 'Ready'; provisioningState = 'Succeeded' }
+            }
+            if ($joined -eq "sql mi show --ids $targetId") {
+                return [pscustomobject]@{ id = $targetId; name = 'target-mi'; location = 'eastus'; state = 'Ready'; provisioningState = 'Succeeded' }
+            }
+            if ($joined -like 'sql midb list*--managed-instance test-mi*') {
+                return @([pscustomobject]@{ name = 'db1'; status = 'Online'; earliestRestoreDate = $earliest; id = "$resourceId/databases/db1" })
+            }
+            if ($joined -like 'sql midb list*--managed-instance target-mi*') {
+                return @([pscustomobject]@{ name = 'db1-restore'; status = 'Online'; id = "$targetId/databases/db1-restore" })
+            }
+            throw "Unexpected mock Azure CLI call: $joined"
+        }
+        Assert-ThrowsLike {
+            Get-MiOpsRestorePlan -Config $restoreConfig -SourceDatabase 'db1' -TargetManagedInstanceId $targetId `
+                -TargetDatabase 'db1-restore' -RestoreTimeUtc $restoreTime -AzInvoker $invoker
+        } '*already exists*never overwrites*' 'Existing destination database was accepted.'
+    }
+
+    Test-Case 'restore apply requires dual approvals and exact field-bound phrase' {
+        $targetId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/target-rg/providers/Microsoft.Sql/managedInstances/target-mi'
+        $path = Join-Path $tempRoot 'restore-apply.json'
+        $restoreConfig = $baseConfig.Clone()
+        $restoreConfig.restoreTargets = @{ allowedResourceIds = @($targetId) }
+        $restoreConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $path
+        $restoreConfig = Get-MiOpsConfig -Path $path -RepositoryRoot $tempRoot
+        $restoreTime = [DateTimeOffset]::UtcNow.AddHours(-1).ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $earliest = [DateTimeOffset]::UtcNow.AddDays(-7).ToString('o')
+        $script:restoreSubmissionArguments = $null
+        $invoker = {
+            param([string[]]$Arguments, [bool]$AllowEmpty)
+            $joined = $Arguments -join ' '
+            if ($joined -eq "sql mi show --ids $resourceId") {
+                return [pscustomobject]@{ id = $resourceId; name = 'test-mi'; location = 'eastus'; state = 'Ready'; provisioningState = 'Succeeded' }
+            }
+            if ($joined -eq "sql mi show --ids $targetId") {
+                return [pscustomobject]@{ id = $targetId; name = 'target-mi'; location = 'eastus'; state = 'Ready'; provisioningState = 'Succeeded' }
+            }
+            if ($joined -like 'sql midb list*--managed-instance test-mi*') {
+                return @([pscustomobject]@{ name = 'db1'; status = 'Online'; earliestRestoreDate = $earliest; id = "$resourceId/databases/db1" })
+            }
+            if ($joined -like 'sql midb list*--managed-instance target-mi*') {
+                return @()
+            }
+            if ($joined -like 'sql midb restore*') {
+                $script:restoreSubmissionArguments = $Arguments
+                return $null
+            }
+            throw "Unexpected mock Azure CLI call: $joined"
+        }
+        Assert-ThrowsLike {
+            Invoke-MiOpsRestore -Config $restoreConfig -SourceDatabase 'db1' -TargetManagedInstanceId $targetId `
+                -TargetDatabase 'db1-restore' -RestoreTimeUtc $restoreTime -Apply `
+                -ApproveSourceResourceId $resourceId -ApproveTargetResourceId $targetId `
+                -TypedConfirmation 'yes' -AzInvoker $invoker
+        } '*Typed confirmation did not exactly match*' 'Conversational approval was accepted.'
+        Assert-ThrowsLike {
+            Invoke-MiOpsRestore -Config $restoreConfig -SourceDatabase 'db1' -TargetManagedInstanceId $targetId `
+                -TargetDatabase 'db1-restore' -RestoreTimeUtc $restoreTime -Apply `
+                -ApproveSourceResourceId $resourceId -ApproveTargetResourceId $resourceId `
+                -TypedConfirmation "RESTORE db1 TO target-mi/db1-restore AT $restoreTime" -AzInvoker $invoker
+        } '*exact -ApproveSourceResourceId and -ApproveTargetResourceId*' 'Wrong target approval was accepted.'
+        $submitted = Invoke-MiOpsRestore -Config $restoreConfig -SourceDatabase 'db1' -TargetManagedInstanceId $targetId `
+            -TargetDatabase 'db1-restore' -RestoreTimeUtc $restoreTime -Apply `
+            -ApproveSourceResourceId $resourceId -ApproveTargetResourceId $targetId `
+            -TypedConfirmation "RESTORE db1 TO target-mi/db1-restore AT $restoreTime" -AzInvoker $invoker
+        $joined = $script:restoreSubmissionArguments -join ' '
+        Assert-True ($submitted.operation.status -eq 'Submitted') 'Accepted restore was not persisted as Submitted.'
+        Assert-True ($joined -like 'sql midb restore*--dest-name db1-restore*--dest-mi target-mi*--no-wait') 'Restore did not use the fixed current Azure CLI shape.'
+    }
+
+    Test-Case 'restore polling transitions InProgress to Verified and distinguishes failure' {
+        $inProgress = Get-MiOpsRestorePollState -Database ([pscustomobject]@{ status = 'Restoring'; provisioningState = 'Creating' })
+        $verified = Get-MiOpsRestorePollState -Database ([pscustomobject]@{ status = 'Online'; provisioningState = 'Succeeded' })
+        $failed = Get-MiOpsRestorePollState -Database ([pscustomobject]@{ status = 'Inaccessible'; provisioningState = 'Failed' })
+        $notFound = Get-MiOpsRestorePollState -ErrorMessage 'ResourceNotFound: database not found'
+        Assert-True ($inProgress.status -eq 'InProgress') 'Restoring database was not InProgress.'
+        Assert-True ($verified.status -eq 'Verified') 'Online database was not Verified.'
+        Assert-True ($failed.status -eq 'Failed') 'Terminal database failure was not Failed.'
+        Assert-True ($notFound.status -eq 'InProgress') 'Destination not yet visible was not treated as InProgress.'
+    }
+
+    Test-Case 'restore poll transitions persist InProgress and Verified states' {
+        $targetId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/target-rg/providers/Microsoft.Sql/managedInstances/target-mi'
+        $path = Join-Path $tempRoot 'restore-poll.json'
+        $restoreConfig = $baseConfig.Clone()
+        $restoreConfig.restoreTargets = @{ allowedResourceIds = @($targetId) }
+        $restoreConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $path
+        $restoreConfig = Get-MiOpsConfig -Path $path -RepositoryRoot $tempRoot
+        $operation = [ordered]@{
+            operationId = 'restore-poll-operation'
+            action = 'restore'
+            status = 'Submitted'
+            sourceManagedInstanceId = $resourceId
+            targetManagedInstanceId = $targetId
+            targetDatabase = 'db1-restore'
+            updatedAtUtc = [DateTime]::UtcNow.ToString('o')
+            verification = $null
+        }
+        $null = Save-MiOpsOperation -Config $restoreConfig -Operation $operation
+        $restoringInvoker = {
+            param([string[]]$Arguments, [bool]$AllowEmpty)
+            return [pscustomobject]@{ name = 'db1-restore'; status = 'Restoring'; provisioningState = 'Creating' }
+        }
+        $first = Update-MiOpsRestoreOperation -Config $restoreConfig -Operation (Get-MiOpsOperation -Config $restoreConfig -OperationId 'restore-poll-operation') -AzInvoker $restoringInvoker
+        Assert-True ($first.operation.status -eq 'InProgress') 'Restore poll did not persist InProgress.'
+        $onlineInvoker = {
+            param([string[]]$Arguments, [bool]$AllowEmpty)
+            return [pscustomobject]@{ name = 'db1-restore'; status = 'Online'; provisioningState = 'Succeeded' }
+        }
+        $second = Update-MiOpsRestoreOperation -Config $restoreConfig -Operation (Get-MiOpsOperation -Config $restoreConfig -OperationId 'restore-poll-operation') -AzInvoker $onlineInvoker
+        $loaded = Get-MiOpsOperation -Config $restoreConfig -OperationId 'restore-poll-operation'
+        Assert-True ($second.operation.status -eq 'Verified') 'Restore poll did not transition to Verified.'
+        Assert-True ($loaded.status -eq 'Verified') 'Verified restore state was not persisted.'
+    }
 }
 finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force

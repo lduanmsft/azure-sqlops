@@ -21,7 +21,9 @@ flowchart LR
     Module --> State[(Local .miops state)]
     Module --> Audit[(Redacted audit.jsonl)]
     Module --> Draft[Support draft]
-    SQL[Optional SQL adapter] -. not implemented .-> Module
+    Module --> Restore[PITR plan/apply/poll]
+    Restore --> Az
+    SQL[Optional fixed sqlcmd backup-history adapter] -. disabled by default .-> Module
 ```
 
 The MVP is intentionally a local, inspectable tool rather than a hosted service. Copilot CLI selects and explains operations; deterministic PowerShell enforces the safety boundary and invokes only fixed Azure CLI command shapes.
@@ -34,12 +36,12 @@ Azure SRE Agent is not shown in the runtime because it is not required. A future
 |---|---|---|
 | `.github/skills/*/SKILL.md` | Canonical project-scoped Copilot discovery and safe command guidance | Implemented |
 | `miops.ps1` | Stable CLI command dispatcher | Implemented, locally tested |
-| `src/MiOps.psm1` | Setup validation/selection, config, policy, Azure adapters, state, audit, evidence, support draft | Implemented, locally tested without Azure |
+| `src/MiOps.psm1` and `src/MiOps.BackupRestore.ps1` | Setup, config/policy, Azure adapters, database/backup shaping, PITR planning/submission/polling, state, audit, evidence, support draft | Implemented, locally tested without Azure |
 | `config/miops.example.json` | Checked-in schema/example for one MI | Implemented |
 | `config/miops.local.json` | Operator-owned local configuration | Ignored |
 | `.miops/operations` | Durable local operation records | Implemented |
 | `.miops/audit.jsonl` | Redacted local audit log | Implemented |
-| SQL adapter | Separate least-privilege DMV/Query Store integration | Interface only |
+| SQL adapter | Fixed `backup-history-v1` query through `sqlcmd -G`, bounded and disabled by default | Implemented, not tenant/network validated |
 | Support API submission | Entitlement-aware ticket creation | Not implemented |
 
 ## Onboarding and interactive flow
@@ -82,6 +84,45 @@ sequenceDiagram
 
 The local GUID is always captured. An Azure operation identifier is also stored if Azure CLI returns one. Because `az sql mi ... --no-wait` may return no body, later polling uses the authoritative resource state. API acceptance is never labeled verified completion.
 
+## Database backup and restore flow
+
+`database-list` reads the exact source MI, refuses non-source-allowlisted IDs, checks MI availability, calls the fixed `az sql midb list` shape, excludes system databases, and normalizes current CLI schema differences.
+
+`backup-check` combines:
+
+- ARM database state and earliest restore boundary where exposed.
+- STR policy per database.
+- LTR policy and LTR backup records when configured or required.
+- Restorable deleted database evidence.
+- Explicit Azure permission/API gaps.
+- Optional recent `msdb` history from one fixed SQL query.
+
+ARM is the durable evidence source but does not expose every individual STR full/differential/log record. SQL history provides recent transparency only and can be absent or incomplete.
+
+```mermaid
+sequenceDiagram
+    actor O as Operator
+    participant P as PowerShell policy
+    participant S as Local state
+    participant A as Azure CLI/ARM
+
+    O->>P: restore-plan
+    P->>P: source allowlist + target allowlist + strict UTC/name checks
+    P->>A: read source/target MI and database inventories
+    A-->>P: state, region, earliestRestoreDate, destination existence
+    P-->>O: exact plan and RESTORE phrase
+    O->>P: restore-apply + dual resource approvals + exact phrase
+    P->>S: persist Ready/Submitting
+    P->>A: az sql midb restore ... --no-wait
+    A-->>P: accepted response when available
+    P->>S: persist Submitted
+    O->>P: operation-poll
+    P->>A: az sql midb show for destination
+    P->>S: persist InProgress/Verified/Failed
+```
+
+The target list is independent from source `allowedResourceIds`; inventory and discovery never populate it. Same-instance restore also requires explicit target configuration. `Verified` requires the destination database to be `Online` with successful provisioning.
+
 ## Schedule boundary
 
 Azure CLI exposes `az sql mi start-stop-schedule`. Phase 1:
@@ -105,14 +146,14 @@ Unavailable permissions, metrics, providers, or features become `evidenceGaps`; 
 
 ## SQL diagnostics boundary
 
-Azure RBAC and SQL data-plane authorization are independent. The interface requires a future adapter to:
+Azure RBAC and SQL data-plane authorization are independent. The optional adapter:
 
-- Authenticate with a separate least-privilege SQL identity.
-- Execute only reviewed, parameterized, read-only queries.
+- Authenticates through `sqlcmd -G` with a separate least-privilege Microsoft Entra SQL identity.
+- Executes only the fixed read-only `backup-history-v1` query.
 - Apply timeout, row limit, and redaction.
 - Avoid requiring `sysadmin`.
 
-No DMV or Query Store data is generated, inferred, or faked in phase 1.
+It accepts no password/token/connection string or arbitrary SQL input. Missing tooling, network reachability, authentication, or permission becomes an evidence gap; no data is inferred or faked.
 
 ## Support escalation boundary
 

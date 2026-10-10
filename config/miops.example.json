@@ -6,6 +6,9 @@
       "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example-rg/providers/Microsoft.Sql/managedInstances/example-mi"
     ]
   },
+  "restoreTargets": {
+    "allowedResourceIds": []
+  },
   "azure": {
     "managedInstanceApiVersion": "2023-08-01-preview",
     "resourceHealthApiVersion": "2023-07-01-preview"
@@ -25,13 +28,24 @@
       "io_bytes_written"
     ]
   },
+  "backupHealth": {
+    "minimumShortTermRetentionDays": 7,
+    "requireLongTermRetention": false,
+    "maximumLatestLongTermBackupAgeDays": 8,
+    "maximumFullBackupAgeHours": 192,
+    "maximumDifferentialBackupAgeHours": 48,
+    "maximumLogBackupAgeMinutes": 30
+  },
   "state": {
     "directory": ".miops"
   },
   "sqlDiagnostics": {
     "enabled": false,
-    "adapter": null,
-    "notes": "Optional adapter only. Azure RBAC does not grant SQL DMV or Query Store access."
+    "adapter": "sqlcmd-entra",
+    "connectTimeoutSeconds": 15,
+    "queryTimeoutSeconds": 30,
+    "maxRows": 1000,
+    "notes": "Optional fixed backup-history-v1 query only. Uses sqlcmd Microsoft Entra authentication; no passwords or tokens in config."
   },
   "support": {
     "submissionEnabled": false,

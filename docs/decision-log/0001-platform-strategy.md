@@ -43,7 +43,7 @@ The repository and public skill code can be free/open source. The whole solution
 - Local JSON is not distributed or highly available.
 - Tenant identity and permissions are not provisioned automatically.
 - Copilot and Azure service charges remain possible.
-- SQL and Support integrations require separate future adapters.
+- General SQL diagnostics and Support submission require separate future adapters. A later bounded addition implements only the disabled-by-default fixed `backup-history-v1` SQL read-only adapter.
 
 ## Azure SRE Agent migration path
 

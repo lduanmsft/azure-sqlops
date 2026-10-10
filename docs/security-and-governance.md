@@ -5,14 +5,16 @@
 ## Enforced locally
 
 - Exact MI resource-ID allowlist.
+- Independent exact restore-target resource-ID allowlist.
 - Default read-only/dry-run behavior.
 - `-Apply` plus exact `-ApproveResourceId` for mutations.
 - Fixed Azure CLI command shapes rather than arbitrary shell input.
 - Local persistence before and after lifecycle submission.
+- Local persistence before PITR submission plus destination-state verification.
 - Explicit `Submitted`, `InProgress`, `Verified`, and `Failed` distinctions.
 - Structured redaction for sensitive property names and bearer/token-like text.
 - Local JSONL audit records.
-- No SQL command execution.
+- Optional fixed read-only `backup-history-v1` SQL execution only; disabled by default.
 - No Support API submission.
 
 These controls supplement rather than replace Azure RBAC, policy, locks, and operational change management.
@@ -27,11 +29,13 @@ Neither browser nor device-code login bypasses Conditional Access or device-comp
 
 ## SQL authorization
 
-Azure RBAC does not grant SQL DMV/Query Store access. A future adapter must use a separate least-privilege SQL identity and reviewed read-only queries. Avoid `sysadmin`, `db_owner`, arbitrary generated SQL, and unrestricted result sets.
+Azure RBAC does not grant SQL data-plane access. The optional adapter uses `sqlcmd -G`, one fixed reviewed `msdb` query, timeout, and row limit. Use a separate least-privilege Microsoft Entra SQL identity with only the required metadata/history read permission. Avoid `sysadmin`, `db_owner`, passwords/tokens in config, arbitrary SQL, and unrestricted result sets.
 
 ## Resource allowlist and confirmation
 
 The checked-in example contains a placeholder resource. Operators create ignored `config/miops.local.json` with one exact MI resource ID in both `resource.id` and `allowedResourceIds`.
+
+Restore targets are separate in `restoreTargets.allowedResourceIds`. A listed, discovered, or source-allowlisted MI never becomes a target automatically. Adding one requires an exact Azure-read resource ID plus `CONFIGURE RESTORE TARGET <mi-name>`.
 
 Mutating commands reject:
 
@@ -40,6 +44,16 @@ Mutating commands reject:
 - Missing `-Apply`.
 - Missing or non-exact `-ApproveResourceId`.
 - Locally unsupported lifecycle tier/configuration.
+
+Restore apply additionally rejects:
+
+- Source outside `resource.allowedResourceIds`.
+- Target outside `restoreTargets.allowedResourceIds`.
+- Missing or mismatched source/target resource approvals.
+- A phrase other than `RESTORE <source-db> TO <target-mi>/<target-db> AT <timestamp>`.
+- System or unsafe database names, future/non-UTC timestamps, pre-earliest restore points, existing destinations, unavailable instances, region mismatch, or verifiable tenant mismatch.
+
+Azure still enforces supported cross-subscription types, primary-instance/primary-region rules, source backup availability, BYOK, service endpoint policies, capacity, locks, and permissions.
 
 The interactive menu additionally requires a case-sensitive `START <mi-name>` or `STOP <mi-name>` phrase after showing the exact name, resource ID, and observed state. Selecting a menu number never adds `-Apply`.
 
@@ -51,7 +65,7 @@ The redactor removes values under common secret property names and token-like st
 
 ## Evidence minimization
 
-Phase 1 collects control-plane configuration, Activity Log, Resource Health, and configured metrics. It does not collect SQL query text or customer data. Missing sources are listed explicitly.
+Phase 1 collects control-plane configuration, database/retention metadata, restorable-deleted evidence, LTR records where applicable, Activity Log, Resource Health, and configured metrics. Optional SQL backup history collects database names and latest backup timestamps only. It does not collect customer rows or arbitrary query text. Missing sources are listed explicitly.
 
 Evidence and drafts may still contain resource names, subscription IDs, actor identifiers, and operational metadata. Apply organization retention, access, and sharing policies.
 
@@ -85,4 +99,5 @@ Open-source code does not eliminate service cost. Establish budgets for Copilot/
 - No background reconciliation service.
 - Redaction is rule-based and requires human review for outbound sharing.
 - Conservative eligibility rules can block newly supported configurations until config/policy is reviewed.
+- Cross-subscription subscription-type eligibility is reported as an Azure-side constraint because Azure CLI account metadata does not provide a stable authoritative type field for all clouds.
 - No tenant execution evidence is included.
