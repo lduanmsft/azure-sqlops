@@ -451,6 +451,200 @@ try {
         Assert-True (-not (Test-MiOpsDatabaseName -Name 'db1/restore')) 'Unsafe destination name was accepted.'
     }
 
+    Test-Case 'LTR retention parsing is strict normalized and bounded' {
+        Assert-True ((ConvertTo-MiOpsLtrRetention -Value 'P12W' -Dimension Weekly).normalized -eq 'P12W') 'Weekly retention was not normalized.'
+        Assert-True ((ConvertTo-MiOpsLtrRetention -Value 'P12M' -Dimension Monthly).normalized -eq 'P12M') 'Monthly retention was not normalized.'
+        Assert-True ((ConvertTo-MiOpsLtrRetention -Value 'P5Y' -Dimension Yearly).normalized -eq 'P5Y') 'Yearly retention was not normalized.'
+        Assert-True ((ConvertTo-MiOpsLtrRetention -Value 'P1M' -Dimension Weekly).enabled) 'Azure-supported cross-dimension ISO unit was rejected.'
+        Assert-True ((ConvertTo-MiOpsLtrRetention -Value 'P3650D' -Dimension Weekly).enabled) 'Maximum day retention was rejected.'
+        Assert-True ((ConvertTo-MiOpsLtrRetention -Value 'P521W' -Dimension Weekly).enabled) 'Maximum week retention was rejected.'
+        Assert-True ((ConvertTo-MiOpsLtrRetention -Value 'P120M' -Dimension Monthly).enabled) 'Maximum monthly retention was rejected.'
+        Assert-True ((ConvertTo-MiOpsLtrRetention -Value 'P10Y' -Dimension Yearly).enabled) 'Maximum yearly retention was rejected.'
+        Assert-True (-not (ConvertTo-MiOpsLtrRetention -Value 'PT0S' -Dimension Weekly).enabled) 'PT0S was not treated as disabled.'
+        Assert-Throws { ConvertTo-MiOpsLtrRetention -Value '12' -Dimension Weekly } 'Bare numeric retention was accepted.'
+        Assert-Throws { ConvertTo-MiOpsLtrRetention -Value 'P6D' -Dimension Weekly } 'Retention below seven days was accepted.'
+        Assert-Throws { ConvertTo-MiOpsLtrRetention -Value 'P1Y2M' -Dimension Yearly } 'Combined duration was accepted.'
+        Assert-Throws { ConvertTo-MiOpsLtrRetention -Value 'P0W' -Dimension Weekly } 'Zero duration outside PT0S was accepted.'
+        Assert-Throws { ConvertTo-MiOpsLtrRetention -Value 'P3651D' -Dimension Weekly } 'Day retention above 10 years was accepted.'
+        Assert-Throws { ConvertTo-MiOpsLtrRetention -Value 'P522W' -Dimension Weekly } 'Weekly retention above 10 years was accepted.'
+        Assert-Throws { ConvertTo-MiOpsLtrRetention -Value 'P121M' -Dimension Monthly } 'Monthly retention above 10 years was accepted.'
+        Assert-Throws { ConvertTo-MiOpsLtrRetention -Value 'P11Y' -Dimension Yearly } 'Yearly retention above 10 years was accepted.'
+    }
+
+    Test-Case 'LTR current policy shaping normalizes Azure disabled sentinels' {
+        $policy = ConvertTo-MiOpsLtrPolicy -Policy ([pscustomobject]@{
+            weeklyRetention = 'P84D'
+            monthlyRetention = 'P0D'
+            yearlyRetention = 'PT0S'
+            weekOfYear = 51
+        }) -FromAzure
+        Assert-True ($policy.weeklyRetention -eq 'P84D') 'Azure day-form weekly retention was not preserved safely.'
+        Assert-True ($policy.monthlyRetention -eq 'PT0S') 'Azure monthly disabled sentinel was not normalized.'
+        Assert-True ($policy.yearlyRetention -eq 'PT0S') 'Azure yearly disabled sentinel was not normalized.'
+        Assert-True ($policy.weekOfYear -eq 0) 'Irrelevant week-of-year was not normalized to zero.'
+        $dayPolicy = ConvertTo-MiOpsLtrPolicy -Policy ([pscustomobject]@{
+            weeklyRetention = 'P7D'
+            monthlyRetention = 'P365D'
+            yearlyRetention = 'P1825D'
+            weekOfYear = 1
+        }) -FromAzure
+        Assert-True ($dayPolicy.weeklyRetention -eq 'P7D') 'Azure weekly day form was not preserved safely.'
+        Assert-True ($dayPolicy.monthlyRetention -eq 'P365D') 'Azure monthly day form was not preserved safely.'
+        Assert-True ($dayPolicy.yearlyRetention -eq 'P1825D') 'Azure yearly day form was not preserved safely.'
+    }
+
+    Test-Case 'LTR requested policy validates week and rejects all disabled' {
+        Assert-ThrowsLike {
+            New-MiOpsLtrRequestedPolicy -WeeklyRetention 'PT0S' -MonthlyRetention 'PT0S' -YearlyRetention 'PT0S' -WeekOfYear 0
+        } '*At least one LTR retention dimension must remain enabled*' 'All-disabled LTR policy was accepted.'
+        Assert-ThrowsLike {
+            New-MiOpsLtrRequestedPolicy -WeeklyRetention 'P12W' -MonthlyRetention 'P12M' -YearlyRetention 'P5Y' -WeekOfYear 53
+        } '*between 1 and 52*' 'Out-of-range yearly week was accepted.'
+        Assert-ThrowsLike {
+            New-MiOpsLtrRequestedPolicy -WeeklyRetention 'P12W' -MonthlyRetention 'P12M' -YearlyRetention 'PT0S' -WeekOfYear 1
+        } '*must be 0 when yearly retention is PT0S*' 'Week was accepted while yearly retention was disabled.'
+    }
+
+    Test-Case 'LTR no-weakening detects reductions and exact confirmation' {
+        $current = New-MiOpsLtrRequestedPolicy -WeeklyRetention 'P12W' -MonthlyRetention 'P12M' -YearlyRetention 'P5Y' -WeekOfYear 1
+        $increase = New-MiOpsLtrRequestedPolicy -WeeklyRetention 'P13W' -MonthlyRetention 'P12M' -YearlyRetention 'P6Y' -WeekOfYear 1
+        $reduction = New-MiOpsLtrRequestedPolicy -WeeklyRetention 'P6W' -MonthlyRetention 'PT0S' -YearlyRetention 'P5Y' -WeekOfYear 1
+        Assert-True (-not (Test-MiOpsLtrPolicyReduction -Current $current -Requested $increase).isReduction) 'Retention increase was treated as reduction.'
+        Assert-True ((Test-MiOpsLtrPolicyReduction -Current $current -Requested $reduction).isReduction) 'Retention weakening was not detected.'
+        Assert-True (Test-MiOpsLtrConfirmation -Database 'test02' -Policy $increase -IsReduction $false -Confirmation 'SET LTR test02 WEEKLY P13W MONTHLY P12M YEARLY P6Y WEEK 1') 'Exact normal confirmation was rejected.'
+        Assert-True (-not (Test-MiOpsLtrConfirmation -Database 'test02' -Policy $reduction -IsReduction $true -Confirmation 'SET LTR test02 WEEKLY P6W MONTHLY PT0S YEARLY P5Y WEEK 1')) 'Normal confirmation authorized a reduction.'
+        Assert-True (Test-MiOpsLtrConfirmation -Database 'test02' -Policy $reduction -IsReduction $true -Confirmation 'REDUCE LTR test02 WEEKLY P6W MONTHLY PT0S YEARLY P5Y WEEK 1') 'Exact reduction confirmation was rejected.'
+    }
+
+    Test-Case 'LTR plan uses fixed CLI arguments and never mutates' {
+        $path = Join-Path $tempRoot 'ltr-plan.json'
+        $baseConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $path
+        $config = Get-MiOpsConfig -Path $path -RepositoryRoot $tempRoot
+        $script:ltrSetCalls = 0
+        $invoker = {
+            param([string[]]$Arguments, [bool]$AllowEmpty)
+            $joined = $Arguments -join ' '
+            if ($joined -eq "sql mi show --ids $resourceId") {
+                return [pscustomobject]@{ id = $resourceId; name = 'test-mi'; state = 'Ready'; provisioningState = 'Succeeded' }
+            }
+            if ($joined -like 'sql midb list*') {
+                return @([pscustomobject]@{ name = 'test02'; status = 'Online'; id = "$resourceId/databases/test02" })
+            }
+            if ($joined -like 'sql midb ltr-policy show*') {
+                return [pscustomobject]@{ weeklyRetention = 'P4W'; monthlyRetention = 'PT0S'; yearlyRetention = 'PT0S'; weekOfYear = 0 }
+            }
+            if ($joined -like 'sql midb ltr-policy set*') {
+                $script:ltrSetCalls++
+            }
+            throw "Unexpected mock Azure CLI call: $joined"
+        }
+        $plan = Get-MiOpsLtrPolicyPlan -Config $config -Database 'test02' -WeeklyRetention 'P12W' `
+            -MonthlyRetention 'P12M' -YearlyRetention 'P5Y' -WeekOfYear 1 -AzInvoker $invoker
+        Assert-True ($script:ltrSetCalls -eq 0) 'LTR planning mutated Azure.'
+        Assert-True (($plan.azureCliArguments -join ' ') -eq 'sql midb ltr-policy set --resource-group test-rg --managed-instance test-mi --name test02 --weekly-retention P12W --monthly-retention P12M --yearly-retention P5Y --week-of-year 1 --subscription 00000000-0000-0000-0000-000000000000') 'LTR plan did not produce the fixed CLI shape.'
+        Assert-True ($plan.requiredConfirmation -eq 'SET LTR test02 WEEKLY P12W MONTHLY P12M YEARLY P5Y WEEK 1') 'LTR plan confirmation was not bound to the full policy.'
+    }
+
+    Test-Case 'LTR apply blocks weakening without both explicit safeguards' {
+        $path = Join-Path $tempRoot 'ltr-reduction.json'
+        $baseConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $path
+        $config = Get-MiOpsConfig -Path $path -RepositoryRoot $tempRoot
+        $invoker = {
+            param([string[]]$Arguments, [bool]$AllowEmpty)
+            $joined = $Arguments -join ' '
+            if ($joined -eq "sql mi show --ids $resourceId") {
+                return [pscustomobject]@{ id = $resourceId; name = 'test-mi'; state = 'Ready'; provisioningState = 'Succeeded' }
+            }
+            if ($joined -like 'sql midb list*') {
+                return @([pscustomobject]@{ name = 'test02'; status = 'Online'; id = "$resourceId/databases/test02" })
+            }
+            if ($joined -like 'sql midb ltr-policy show*') {
+                return [pscustomobject]@{ weeklyRetention = 'P12W'; monthlyRetention = 'P12M'; yearlyRetention = 'P5Y'; weekOfYear = 1 }
+            }
+            throw "Unexpected mock Azure CLI call: $joined"
+        }
+        Assert-ThrowsLike {
+            Invoke-MiOpsLtrPolicy -Config $config -Database 'test02' -WeeklyRetention 'P6W' `
+                -MonthlyRetention 'PT0S' -YearlyRetention 'P5Y' -WeekOfYear 1 -Apply `
+                -ApproveResourceId $resourceId -TypedConfirmation 'REDUCE LTR test02 WEEKLY P6W MONTHLY PT0S YEARLY P5Y WEEK 1' -AzInvoker $invoker
+        } '*-AllowRetentionReduction*' 'Reduction was accepted without the explicit switch.'
+        Assert-ThrowsLike {
+            Invoke-MiOpsLtrPolicy -Config $config -Database 'test02' -WeeklyRetention 'P6W' `
+                -MonthlyRetention 'PT0S' -YearlyRetention 'P5Y' -WeekOfYear 1 -Apply `
+                -ApproveResourceId $resourceId -AllowRetentionReduction `
+                -TypedConfirmation 'SET LTR test02 WEEKLY P6W MONTHLY PT0S YEARLY P5Y WEEK 1' -AzInvoker $invoker
+        } '*Typed confirmation did not exactly match*' 'Reduction was accepted without the REDUCE phrase.'
+    }
+
+    Test-Case 'LTR apply persists intent redacts response and verifies exact read-back' {
+        $path = Join-Path $tempRoot 'ltr-apply.json'
+        $baseConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $path
+        $config = Get-MiOpsConfig -Path $path -RepositoryRoot $tempRoot
+        $script:ltrShowCount = 0
+        $script:ltrSubmissionArguments = $null
+        $invoker = {
+            param([string[]]$Arguments, [bool]$AllowEmpty)
+            $joined = $Arguments -join ' '
+            if ($joined -eq "sql mi show --ids $resourceId") {
+                return [pscustomobject]@{ id = $resourceId; name = 'test-mi'; state = 'Ready'; provisioningState = 'Succeeded' }
+            }
+            if ($joined -like 'sql midb list*') {
+                return @([pscustomobject]@{ name = 'test02'; status = 'Online'; id = "$resourceId/databases/test02" })
+            }
+            if ($joined -like 'sql midb ltr-policy show*') {
+                $script:ltrShowCount++
+                if ($script:ltrShowCount -eq 1) {
+                    return [pscustomobject]@{ weeklyRetention = 'P4W'; monthlyRetention = 'PT0S'; yearlyRetention = 'PT0S'; weekOfYear = 0 }
+                }
+                return [pscustomobject]@{ weeklyRetention = 'P12W'; monthlyRetention = 'P12M'; yearlyRetention = 'P5Y'; weekOfYear = 1 }
+            }
+            if ($joined -like 'sql midb ltr-policy set*') {
+                $script:ltrSubmissionArguments = $Arguments
+                return [pscustomobject]@{ status = 'Accepted'; accessToken = 'secret-value' }
+            }
+            throw "Unexpected mock Azure CLI call: $joined"
+        }
+        $result = Invoke-MiOpsLtrPolicy -Config $config -Database 'test02' -WeeklyRetention 'P12W' `
+            -MonthlyRetention 'P12M' -YearlyRetention 'P5Y' -WeekOfYear 1 -Apply `
+            -ApproveResourceId $resourceId `
+            -TypedConfirmation 'SET LTR test02 WEEKLY P12W MONTHLY P12M YEARLY P5Y WEEK 1' -AzInvoker $invoker
+        $operationText = Get-Content -LiteralPath $result.operationPath -Raw
+        $auditText = Get-Content -LiteralPath (Join-Path $config.state.directory 'audit.jsonl') -Raw
+        Assert-True ($result.operation.status -eq 'Verified') 'Exact LTR read-back was not marked Verified.'
+        Assert-True (($script:ltrSubmissionArguments -join ' ') -like 'sql midb ltr-policy set*--weekly-retention P12W*--monthly-retention P12M*--yearly-retention P5Y*') 'LTR apply did not use the reviewed fixed command.'
+        Assert-True ($operationText -match '"accessToken":\s*"\[REDACTED\]"') 'Sensitive Azure response was not redacted in operation state.'
+        Assert-True ($auditText -match 'ltr.policy.ready') 'Pre-submission LTR audit record was not persisted.'
+        Assert-True ($auditText -notmatch 'secret-value') 'Sensitive Azure response leaked into audit records.'
+    }
+
+    Test-Case 'LTR apply never verifies a read-back mismatch' {
+        $path = Join-Path $tempRoot 'ltr-mismatch.json'
+        $baseConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $path
+        $config = Get-MiOpsConfig -Path $path -RepositoryRoot $tempRoot
+        $invoker = {
+            param([string[]]$Arguments, [bool]$AllowEmpty)
+            $joined = $Arguments -join ' '
+            if ($joined -eq "sql mi show --ids $resourceId") {
+                return [pscustomobject]@{ id = $resourceId; name = 'test-mi'; state = 'Ready'; provisioningState = 'Succeeded' }
+            }
+            if ($joined -like 'sql midb list*') {
+                return @([pscustomobject]@{ name = 'test02'; status = 'Online'; id = "$resourceId/databases/test02" })
+            }
+            if ($joined -like 'sql midb ltr-policy show*') {
+                return [pscustomobject]@{ weeklyRetention = 'P4W'; monthlyRetention = 'PT0S'; yearlyRetention = 'PT0S'; weekOfYear = 0 }
+            }
+            if ($joined -like 'sql midb ltr-policy set*') {
+                return [pscustomobject]@{ status = 'Accepted' }
+            }
+            throw "Unexpected mock Azure CLI call: $joined"
+        }
+        $result = Invoke-MiOpsLtrPolicy -Config $config -Database 'test02' -WeeklyRetention 'P12W' `
+            -MonthlyRetention 'P12M' -YearlyRetention 'P5Y' -WeekOfYear 1 -Apply `
+            -ApproveResourceId $resourceId `
+            -TypedConfirmation 'SET LTR test02 WEEKLY P12W MONTHLY P12M YEARLY P5Y WEEK 1' -AzInvoker $invoker
+        Assert-True ($result.operation.status -eq 'VerificationMismatch') 'Mismatched LTR read-back was incorrectly marked Verified.'
+    }
+
     Test-Case 'restore target allowlist comparison is exact' {
         $targetId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test-rg/providers/Microsoft.Sql/managedInstances/target-mi'
         $config = $baseConfig.Clone()

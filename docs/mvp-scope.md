@@ -16,6 +16,8 @@ Phase 1 uses local GitHub Copilot CLI, project-scoped skill definitions in `.git
 - MI status/configuration read.
 - User database inventory with normalized state and restore metadata.
 - ARM backup health checks for database state, STR, LTR, LTR record age, deleted database evidence, and restore boundaries.
+- Exact-database LTR policy show, current-versus-requested plan, guarded synchronous apply, and independent read-back verification.
+- Strict dimension-specific retention normalization, all-disabled prevention, no-weakening default, and stronger reduction confirmation.
 - Optional disabled-by-default fixed SQL backup-history adapter.
 - Independent exact restore-target configuration.
 - Same-instance and cross-instance PITR plan/apply to a new database.
@@ -44,6 +46,7 @@ Phase 1 uses local GitHub Copilot CLI, project-scoped skill definitions in `.git
 - Distributed locks, multi-host state, immutable audit export, or hosted availability.
 - Tenant-specific permission provisioning.
 - Deleted-database PITR submission and LTR restore submission. Deleted database evidence is read-only in this scope.
+- LTR policy deletion, clearing all dimensions, or LTR backup deletion.
 
 ## Lifecycle safety
 
@@ -64,6 +67,8 @@ Restore is plan-only unless all of these are present:
 4. Typed phrase exactly binds source database, target MI/database, and strict UTC timestamp.
 
 The tool persists the operation before calling `az sql midb restore --no-wait`. `Submitted` means accepted only. `Verified` requires later polling to observe the destination database `Online`.
+
+LTR apply is plan-only unless `-Apply`, exact `-ApproveResourceId`, and a full policy-bound typed confirmation are present. Retention weakening additionally requires `-AllowRetentionReduction` and a phrase beginning with `REDUCE LTR`. The operation is persisted before `az sql midb ltr-policy set`, and `Verified` requires an independent exact normalized read-back. CLI exit 0 is never sufficient.
 
 ## Evidence and recommendations
 
@@ -98,6 +103,7 @@ Locally validated:
 - Wrong or absent explicit confirmation is rejected.
 - Operation state survives process exit through JSON persistence.
 - Restore state transitions preserve Submitted/InProgress/Verified/Failed semantics.
+- LTR parsing, limits, all-disabled rejection, no-weakening, reduction approval, fixed arguments, persistence, redaction, and read-back mismatch behavior.
 - sensitive keys and bearer tokens are redacted.
 
 Requires tenant/MI validation:

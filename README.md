@@ -27,6 +27,9 @@ Ask naturally, for example:
 列出所有 MI
 列出 dlinger 的数据库和状态
 检查 dlinger 是否有异常备份记录
+查看 dlinger/test02 的 LTR 策略
+计划为 test02 配置每周 12 周、每月 12 个月、每年 5 年，第 1 周
+应用这个 LTR 策略
 把 db1 恢复到 2026-10-10T01:00:00Z，目标名 db1-restore
 把 dlinger/db1 恢复到 lduan-mi-sea/db1-restore
 调查这个 MI
@@ -49,6 +52,10 @@ Project skills load only when Copilot starts inside this repository. Starting Co
 - List user databases and minimal ARM state/restore metadata for an exact source MI allowlist entry.
 - Check backup health with conservative per-database warning versus insufficient-evidence findings.
 - Inspect STR/LTR policies, latest LTR records where expected, and restorable deleted databases without claiming ARM exposes every STR backup event.
+- View, plan, and guardedly apply an LTR policy to one exact existing non-system database.
+- Accept only normalized single-unit `P<n>D`, `P<n>W`, `P<n>M`, `P<n>Y`, or per-dimension `PT0S`; reject all-disabled policies and unsupported duration syntax.
+- Block retention weakening by default; require a separate switch and `REDUCE LTR ...` confirmation for an approved reduction.
+- Persist LTR intent before submission and independently read back the synchronous result before marking it `Verified`.
 - Optionally query recent `msdb` backup history through a disabled-by-default, fixed, read-only `sqlcmd -G` adapter.
 - Independently configure exact restore targets; source/discovered MIs never become restore targets automatically.
 - Plan or submit same-instance and cross-instance PITR to a new database using the current `az sql midb restore` command shape.
@@ -63,7 +70,7 @@ Project skills load only when Copilot starts inside this repository. Starting Co
 - Record redacted local JSONL audit events.
 - Expose SQL DMV/Query Store diagnostics as a disabled optional adapter boundary.
 
-Inventory never allowlists resources or grants mutation capability. Phase 1 does **not** perform VM actions, automatically resize, create/update automatic stop schedules, overwrite/delete databases, create native backups, mutate retention, delete LTR backups, run arbitrary SQL, remediate incidents, or submit Microsoft Support cases.
+Inventory never allowlists resources or grants mutation capability. Phase 1 does **not** perform VM actions, automatically resize, create/update automatic stop schedules, overwrite/delete databases, create native backups, clear/delete LTR policies, delete LTR backups, run arbitrary SQL, remediate incidents, or submit Microsoft Support cases.
 
 ## Cost statement
 
@@ -100,6 +107,9 @@ pwsh .\miops.ps1 preflight
 pwsh .\miops.ps1 status
 pwsh .\miops.ps1 database-list
 pwsh .\miops.ps1 backup-check
+pwsh .\miops.ps1 ltr-policy-show -Database 'test02'
+pwsh .\miops.ps1 ltr-policy-plan -Database 'test02' `
+  -WeeklyRetention 'P12W' -MonthlyRetention 'P12M' -YearlyRetention 'P5Y' -WeekOfYear 1
 pwsh .\miops.ps1 evidence -LookbackHours 24
 ```
 
@@ -166,6 +176,24 @@ pwsh .\miops.ps1 operation-poll -OperationId '<local-restore-operation-id>'
 
 Restore defaults to plan-only. Even same-instance restore requires the MI in both the source and independent restore-target allowlists. The destination must not exist, system databases are rejected, the timestamp must be strict UTC and in the past, and Azure-exposed `earliestRestoreDate` is enforced. Cross-instance PITR requires the same region; cross-subscription PITR additionally requires the same Microsoft Entra tenant and Azure-supported subscription types. Azure remains authoritative for primary-instance/primary-region, service endpoint policy, BYOK, storage capacity, permissions, and backup availability constraints.
 
+LTR policy examples:
+
+```powershell
+$mi = '/subscriptions/<subscription>/resourceGroups/<rg>/providers/Microsoft.Sql/managedInstances/<mi>'
+
+pwsh .\miops.ps1 ltr-policy-show -ManagedInstanceId $mi -Database 'test02'
+
+pwsh .\miops.ps1 ltr-policy-plan -ManagedInstanceId $mi -Database 'test02' `
+  -WeeklyRetention 'P12W' -MonthlyRetention 'P12M' -YearlyRetention 'P5Y' -WeekOfYear 1
+
+pwsh .\miops.ps1 ltr-policy-apply -ManagedInstanceId $mi -Database 'test02' `
+  -WeeklyRetention 'P12W' -MonthlyRetention 'P12M' -YearlyRetention 'P5Y' -WeekOfYear 1 `
+  -Apply -ApproveResourceId $mi `
+  -TypedConfirmation 'SET LTR test02 WEEKLY P12W MONTHLY P12M YEARLY P5Y WEEK 1'
+```
+
+`PT0S` can disable one dimension only, and at least one of weekly/monthly/yearly must remain enabled. Reductions or dimension removal are blocked unless `-AllowRetentionReduction` is present and the full exact confirmation starts with `REDUCE LTR`. The tool always reads the current policy first, persists intent before submission, and marks the result `Verified` only after an independent `show` exactly matches the normalized requested policy. Longer retention can increase backup storage cost. Policy changes apply to future LTR backups; existing backups retain the policy assigned when created. Validate compliance requirements before applying.
+
 Schedule and escalation examples:
 
 ```powershell
@@ -197,6 +225,9 @@ pwsh .\miops.ps1 status -ConfigPath 'C:\secure-config\miops.json'
 | `status` | Read-only MI state |
 | `database-list` | Read-only user database state and minimal restore metadata for an exact source MI |
 | `backup-check` | Read-only ARM backup policy/eligibility findings; optional fixed SQL history adapter |
+| `ltr-policy-show` | Read-only normalized LTR policy for one exact existing user database |
+| `ltr-policy-plan` | Current-versus-requested LTR plan, warnings, reduction detection, and exact confirmation; never mutates |
+| `ltr-policy-apply` | Guarded synchronous set plus independent exact read-back verification; never clears all retention |
 | `configure-restore-target` | Adds one exact independently approved target MI to ignored local config |
 | `restore-plan` | Validates and displays a PITR plan; never mutates Azure |
 | `restore-apply` | Non-blocking PITR submission after dual approvals and exact field-bound phrase |
@@ -226,7 +257,7 @@ Local files are not an immutable enterprise audit sink. Protect the workstation 
 pwsh -NoProfile -File .\tests\run-tests.ps1
 ```
 
-Tests do not require Azure. They cover inventory selector validation, database state/schema shaping, anomaly rules and evidence gaps, threshold validation, strict UTC timestamps, system database rejection, exact source/target allowlisting, destination collision rejection, dual approval and typed confirmation, restore persistence/poll transitions, fixed SQL adapter/redaction behavior, all five project skill definitions, repository-root runtime resolution guidance, and removal of obsolete plugin packaging.
+Tests do not require Azure. They cover inventory selector validation, database state/schema shaping, anomaly rules and evidence gaps, threshold validation, strict UTC timestamps, system database rejection, strict LTR parsing/ranges/week validation, all-disabled rejection, current-policy shaping, no-weakening and reduction safeguards, exact LTR confirmation, fixed CLI construction, read-back verification/mismatch, operation/audit persistence and redaction, exact source/target allowlisting, destination collision rejection, dual approval and typed confirmation, restore persistence/poll transitions, fixed SQL adapter behavior, all five project skill definitions, repository-root runtime resolution guidance, and removal of obsolete plugin packaging.
 
 ## Azure SQL Managed Instance backup and restore references
 
@@ -234,6 +265,9 @@ Tests do not require Azure. They cover inventory selector validation, database s
 - [Point-in-time restore for Azure SQL Managed Instance](https://learn.microsoft.com/azure/azure-sql/managed-instance/point-in-time-restore) documents same/different instance and cross-subscription scenarios plus tenant, region, permission, primary-region, BYOK, service endpoint policy, and storage limitations.
 - [Automatic backups for Azure SQL Managed Instance](https://learn.microsoft.com/azure/azure-sql/managed-instance/automated-backups-overview) documents weekly full, 12/24-hour differential, and approximately 10-minute log backup cadence and 7-35 day PITR retention.
 - [Long-term retention for Azure SQL Managed Instance](https://learn.microsoft.com/azure/azure-sql/managed-instance/long-term-backup-retention-configure) documents LTR policy visibility, permissions, up-to-10-year retention, and that the first backup can take up to seven days to appear.
+- [Azure CLI `az sql midb ltr-policy`](https://learn.microsoft.com/cli/azure/sql/midb/ltr-policy) documents the GA `show`/`set` commands, 7-day minimum, 10-year maximum, and week-of-year range 1-52.
+- [Managed Instance LTR create-or-update REST API](https://learn.microsoft.com/rest/api/sql/managed-instance-long-term-retention-policies/create-or-update) documents the full-resource `PUT` model and ISO-8601 policy properties. The runtime therefore supplies all three dimensions explicitly instead of assuming omitted values are preserved.
+- [Long-term retention concepts](https://learn.microsoft.com/azure/azure-sql/database/long-term-retention-overview) documents weekly/monthly/yearly selection semantics, future-backup-only policy changes, storage behavior, failover considerations, and the current Managed Instance immutability limitation.
 - [Azure CLI STR policy](https://learn.microsoft.com/cli/azure/sql/midb/short-term-retention-policy) and [LTR backup](https://learn.microsoft.com/cli/azure/sql/midb/ltr-backup) references define the fixed read-only command shapes used by `backup-check`.
 
 ## Documentation
