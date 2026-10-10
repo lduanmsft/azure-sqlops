@@ -7,7 +7,7 @@ metadata:
 
 # MI Troubleshoot
 
-Use the runtime resolution procedure in `../azure-sqlops/SKILL.md`. Set absolute `$miops` and `$dataRoot` paths; never assume the current directory is the repository.
+Use the repository-root runtime resolution procedure in `../azure-sqlops/SKILL.md`. Set validated absolute `$miops` and `$dataRoot` paths; never assume the current directory is the repository root.
 
 Run:
 

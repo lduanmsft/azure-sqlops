@@ -6,16 +6,19 @@ Executable toolkit for read-only Azure resource inventory plus phase-1 operation
 
 Azure SRE Agent is not an MVP dependency or prerequisite. It is only a possible future migration target.
 
-## Install as a GitHub Copilot CLI plugin
+## Use as project-scoped GitHub Copilot Skills
 
-In GitHub Copilot CLI:
+Clone or pull the repository, enter any directory inside the checkout, and start GitHub Copilot CLI:
 
-```text
-/plugin marketplace add lduanmsft/azure-sqlops
-/plugin install azure-sqlops@azure-sqlops
+```powershell
+git clone https://github.com/lduanmsft/azure-sqlops.git
+Set-Location .\azure-sqlops
+copilot
 ```
 
-Then start `copilot` in the directory where local MI configuration and state should live and ask naturally, for example:
+Copilot automatically discovers all five skills from `.github/skills` at the Git repository root, even when it starts in a nested directory. No marketplace installation, user-level plugin, `--plugin-dir`, or runtime copy is required.
+
+Ask naturally, for example:
 
 ```text
 登录 fdpo tenant，列出 MI，启动选中的实例
@@ -27,7 +30,9 @@ Then start `copilot` in the directory where local MI configuration and state sho
 生成支持工单草稿
 ```
 
-The plugin bundles the same deterministic PowerShell backend used below; it does not rely on the current directory being this repository. See [GitHub Copilot CLI plugin usage](docs/copilot-cli-plugin.md) for update/uninstall commands, first-time setup, local file locations, and capability boundaries.
+The skills resolve the repository root with Git, validate `miops.ps1` and `src/MiOps.psm1`, and keep ignored configuration and state under that root. They never accept an arbitrary runtime path from a prompt.
+
+Project skills load only when Copilot starts inside this repository. Starting Copilot elsewhere does not load Azure SQLOps. If an older user-installed `azure-sqlops` plugin is enabled, uninstall or disable it separately to avoid duplicate same-name skills; this repository does not modify global Copilot configuration. See [GitHub Copilot CLI project skills](docs/copilot-cli-project-skills.md) for discovery, setup, local file locations, and capability boundaries.
 
 ## Implemented phase-1 capabilities
 
@@ -165,22 +170,15 @@ Local files are not an immutable enterprise audit sink. Protect the workstation 
 pwsh -NoProfile -File .\tests\run-tests.ps1
 ```
 
-Tests do not require Azure. They cover inventory selector validation, fixed query construction, subscription matching, minimal result shaping, empty results, configuration validation, exact allowlisting, dry-run/approval safeguards, operation persistence, redaction, plugin manifests, skill discovery, bundled runtime paths, and source/package synchronization.
-
-When canonical runtime or skill files change, refresh the generated plugin package and verify it:
-
-```powershell
-pwsh -NoProfile -File .\scripts\sync-plugin.ps1
-pwsh -NoProfile -File .\scripts\sync-plugin.ps1 -Check
-```
+Tests do not require Azure. They cover inventory selector validation, fixed query construction, subscription matching, minimal result shaping, empty results, configuration validation, exact allowlisting, dry-run/approval safeguards, operation persistence, redaction, all five project skill definitions, repository-root runtime resolution guidance, and removal of obsolete plugin packaging.
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
 - [MVP scope and limitations](docs/mvp-scope.md)
 - [Security and governance](docs/security-and-governance.md)
-- [GitHub Copilot CLI plugin](docs/copilot-cli-plugin.md)
+- [GitHub Copilot CLI project skills](docs/copilot-cli-project-skills.md)
 - [Platform decision](docs/decision-log/0001-platform-strategy.md)
 - [Optional SQL diagnostics adapter contract](adapters/sql/README.md)
 
-The [`skills/`](skills) definitions give Copilot CLI exact command guidance while preserving inventory, MI read-only, and MI mutation boundaries.
+The canonical [`.github/skills/`](.github/skills) definitions give Copilot CLI exact command guidance while preserving inventory, MI read-only, and MI mutation boundaries.

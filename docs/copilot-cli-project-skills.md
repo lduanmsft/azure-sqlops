@@ -1,33 +1,24 @@
-# GitHub Copilot CLI plugin
+# GitHub Copilot CLI project skills
 
-The `azure-sqlops` plugin turns the repository's Azure inventory and SQL Managed Instance skills into one installable conversational experience. The installed package includes the deterministic PowerShell runtime, so Copilot CLI can use it from any working directory.
+This repository exposes Azure inventory and SQL Managed Instance operations as project-scoped Copilot Skills under `.github/skills`. The skills invoke the deterministic PowerShell runtime at the Git repository root.
 
-## Install from GitHub
+## Use from a clone
 
-Install or update GitHub Copilot CLI, then add this repository as a marketplace and install the plugin:
+Clone or pull the repository, enter any directory inside the checkout, and start Copilot CLI:
 
-```text
+```powershell
+git clone https://github.com/lduanmsft/azure-sqlops.git
+Set-Location .\azure-sqlops
 copilot
-/plugin marketplace add lduanmsft/azure-sqlops
-/plugin install azure-sqlops@azure-sqlops
 ```
 
-Restart Copilot CLI after installation if the skills do not appear in the current session. Check discovery with `/skills list`.
+Copilot CLI discovers `.github/skills` from the Git repository root, including when it starts in a nested directory. No `--plugin-dir`, marketplace installation, user-level plugin, or copied runtime is required.
 
-Later updates and removal:
-
-```text
-/plugin marketplace update azure-sqlops
-/plugin update azure-sqlops@azure-sqlops
-/plugin uninstall azure-sqlops
-/plugin marketplace remove azure-sqlops
-```
-
-The equivalent non-interactive commands are `copilot plugin marketplace add`, `copilot plugin install`, `copilot plugin update`, and `copilot plugin uninstall`.
+These skills are available only while Copilot is running inside this repository. Starting Copilot from another repository or an unrelated directory does not load them. If an older user-installed `azure-sqlops` plugin is still enabled, uninstall or disable it separately to avoid duplicate same-name skills; this repository never changes global Copilot configuration.
 
 ## Start a conversation
 
-Start `copilot` in the directory where you want local Azure SQLOps configuration and state to live. Example Chinese prompts:
+Start `copilot` anywhere inside the repository. Example Chinese prompts:
 
 ```text
 登录 fdpo tenant，列出 MI，启动选中的实例
@@ -52,7 +43,7 @@ These are read-only listing requests. They do not configure an MI and never add 
 
 ## Initial setup
 
-For the first prompt, the agent runs the bundled setup command. Azure CLI opens a browser or device-code flow locally. The agent must never ask for a password, token, refresh token, client secret, or other credential.
+For the first prompt, the agent runs the repository setup command. Azure CLI opens a browser or device-code flow locally. The agent must never ask for a password, token, refresh token, client secret, or other credential.
 
 Setup:
 
@@ -62,16 +53,15 @@ Setup:
 4. Shows the exact selected resource ID.
 5. Requires `CONFIGURE <mi-name>` before writing the local allowlist.
 
-When installed as a plugin, local files are placed under the directory where `copilot` was started:
+Local files remain under the repository root regardless of which repository subdirectory launched Copilot:
 
 ```text
-.azure-sqlops/
-  config/miops.local.json
-  .miops/
-    operations/
-    evidence/
-    support/
-    audit.jsonl
+config/miops.local.json
+.miops/
+  operations/
+  evidence/
+  support/
+  audit.jsonl
 ```
 
 These files can contain operational metadata. Keep the directory private, review evidence before sharing it, and move audit records to an approved durable store for production use.
@@ -93,6 +83,12 @@ Mutations remain deterministic:
 - A conversational "yes" or Copilot tool approval cannot bypass those checks.
 - Submission is recorded locally and is not called verified until polling observes the desired Azure state.
 
+## Runtime resolution
+
+The router skill resolves the repository root with `git rev-parse --show-toplevel`, requires both `miops.ps1` and `src/MiOps.psm1`, and uses that validated root as `-DataRoot`. Skills never accept an alternate runtime path from a prompt and never search for or execute arbitrary scripts.
+
+`.github/skills` is Copilot CLI's project discovery directory. `.github/plugins` is not auto-loaded and is intentionally not used by this repository.
+
 ## Direct PowerShell compatibility
 
 Existing repository users can continue to run:
@@ -106,4 +102,4 @@ pwsh .\miops.ps1 inventory -ResourceKind mi
 pwsh .\miops.ps1 status
 ```
 
-The optional `-DataRoot` parameter exists for packaged execution. Omitting it preserves the repository-root config and `.miops` behavior.
+The project skills pass the validated repository root through `-DataRoot`. Direct repository commands can omit it because `miops.ps1` already defaults to its own directory.

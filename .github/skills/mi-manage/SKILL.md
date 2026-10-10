@@ -7,7 +7,7 @@ metadata:
 
 # MI Manage and Inventory
 
-Use the runtime resolution procedure in `../azure-sqlops/SKILL.md`. Never assume the current directory is the repository. Set absolute `$miops` and `$dataRoot` paths before running commands. The runtime is local Copilot CLI + PowerShell 7 + Azure CLI; Azure SRE Agent is not required.
+Use the repository-root runtime resolution procedure in `../azure-sqlops/SKILL.md`. Never assume the current directory is the repository root. Set validated absolute `$miops` and `$dataRoot` paths before running commands. The runtime is local Copilot CLI + PowerShell 7 + Azure CLI; Azure SRE Agent is not required.
 
 ## Tenant onboarding
 
