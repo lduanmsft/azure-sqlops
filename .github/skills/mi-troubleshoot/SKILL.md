@@ -21,10 +21,10 @@ Use another window only between 1 and 168 hours. Build a UTC timeline from the r
 
 This skill is read-only. Do not start/stop the MI, resize, modify configuration, execute T-SQL, kill sessions, or claim resolution.
 
-SQL DMVs and Query Store are an optional future adapter. Check the boundary with:
+General SQL DMVs and Query Store remain outside this skill. The implemented optional SQL adapter is limited to the fixed backup-history query used by `backup-check`. Check the boundary with:
 
 ```powershell
 pwsh -NoProfile -File $miops sql-adapter-status -DataRoot $dataRoot
 ```
 
-Never fabricate SQL evidence or treat its absence as proof of health. Explicitly report access, retention, provider, unsupported-configuration, and metric gaps.
+Never generalize backup-history timestamps into query, wait, capacity, or incident evidence, fabricate SQL evidence, or treat its absence as proof of health. Explicitly report access, retention, provider, unsupported-configuration, and metric gaps.

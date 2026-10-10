@@ -7,6 +7,11 @@ param(
         'interactive',
         'inventory',
         'status',
+        'database-list',
+        'backup-check',
+        'configure-restore-target',
+        'restore-plan',
+        'restore-apply',
         'start',
         'stop',
         'operation-poll',
@@ -30,9 +35,17 @@ param(
     [ValidateSet('all', 'vm', 'mi')]
     [string]$ResourceKind,
     [string]$ManagedInstanceId,
+    [string]$SourceManagedInstanceId,
+    [string]$TargetManagedInstanceId,
+    [string]$SourceDatabase,
+    [string]$TargetDatabase,
+    [string]$RestoreTimeUtc,
     [string]$ApproveManagedInstanceId,
+    [string]$ApproveSourceResourceId,
+    [string]$ApproveTargetResourceId,
     [int]$LookbackHours,
     [switch]$UseDeviceCode,
+    [switch]$UseSqlHistory,
     [switch]$Apply,
     [string]$ApproveResourceId,
     [string]$TypedConfirmation
@@ -338,6 +351,76 @@ switch ($Command) {
     'status' {
         $config = Get-MiOpsConfig -Path $resolvedConfigPath -RepositoryRoot $resolvedDataRoot
         Get-MiOpsStatus -Config $config
+    }
+    'database-list' {
+        $config = Get-MiOpsConfig -Path $resolvedConfigPath -RepositoryRoot $resolvedDataRoot
+        Get-MiOpsDatabaseList -Config $config -ManagedInstanceId $ManagedInstanceId
+    }
+    'backup-check' {
+        $config = Get-MiOpsConfig -Path $resolvedConfigPath -RepositoryRoot $resolvedDataRoot
+        Get-MiOpsBackupHealth -Config $config -ManagedInstanceId $ManagedInstanceId -UseSqlHistory:$UseSqlHistory
+    }
+    'configure-restore-target' {
+        $config = Get-MiOpsConfig -Path $resolvedConfigPath -RepositoryRoot $resolvedDataRoot
+        if (-not $TargetManagedInstanceId) {
+            throw '-TargetManagedInstanceId is required for configure-restore-target.'
+        }
+        $targetName = (Get-MiOpsResourceParts -ResourceId $TargetManagedInstanceId).name
+        $expected = "CONFIGURE RESTORE TARGET $targetName"
+        $confirmation = if ($TypedConfirmation) {
+            $TypedConfirmation
+        }
+        else {
+            Read-Host "Type '$expected' to add this exact restore target"
+        }
+        Add-MiOpsRestoreTarget -Config $config -TargetManagedInstanceId $TargetManagedInstanceId -TypedConfirmation $confirmation
+    }
+    'restore-plan' {
+        $config = Get-MiOpsConfig -Path $resolvedConfigPath -RepositoryRoot $resolvedDataRoot
+        foreach ($required in @(
+            @{ name = '-SourceDatabase'; value = $SourceDatabase },
+            @{ name = '-TargetManagedInstanceId'; value = $TargetManagedInstanceId },
+            @{ name = '-TargetDatabase'; value = $TargetDatabase },
+            @{ name = '-RestoreTimeUtc'; value = $RestoreTimeUtc }
+        )) {
+            if ([string]::IsNullOrWhiteSpace([string]$required.value)) {
+                throw "$($required.name) is required for restore-plan."
+            }
+        }
+        Invoke-MiOpsRestore -Config $config -SourceManagedInstanceId $SourceManagedInstanceId `
+            -SourceDatabase $SourceDatabase -TargetManagedInstanceId $TargetManagedInstanceId `
+            -TargetDatabase $TargetDatabase -RestoreTimeUtc $RestoreTimeUtc
+    }
+    'restore-apply' {
+        $config = Get-MiOpsConfig -Path $resolvedConfigPath -RepositoryRoot $resolvedDataRoot
+        foreach ($required in @(
+            @{ name = '-SourceDatabase'; value = $SourceDatabase },
+            @{ name = '-TargetManagedInstanceId'; value = $TargetManagedInstanceId },
+            @{ name = '-TargetDatabase'; value = $TargetDatabase },
+            @{ name = '-RestoreTimeUtc'; value = $RestoreTimeUtc },
+            @{ name = '-ApproveSourceResourceId'; value = $ApproveSourceResourceId },
+            @{ name = '-ApproveTargetResourceId'; value = $ApproveTargetResourceId }
+        )) {
+            if ([string]::IsNullOrWhiteSpace([string]$required.value)) {
+                throw "$($required.name) is required for restore-apply."
+            }
+        }
+        $targetName = (Get-MiOpsResourceParts -ResourceId $TargetManagedInstanceId).name
+        $expected = "RESTORE $SourceDatabase TO $targetName/$TargetDatabase AT $RestoreTimeUtc"
+        Write-Host "Source MI/database: $SourceManagedInstanceId / $SourceDatabase"
+        Write-Host "Target MI/database: $TargetManagedInstanceId / $TargetDatabase"
+        Write-Host "UTC restore time: $RestoreTimeUtc"
+        $confirmation = if ($TypedConfirmation) {
+            $TypedConfirmation
+        }
+        else {
+            Read-Host "Type '$expected' to submit the non-blocking restore"
+        }
+        Invoke-MiOpsRestore -Config $config -SourceManagedInstanceId $SourceManagedInstanceId `
+            -SourceDatabase $SourceDatabase -TargetManagedInstanceId $TargetManagedInstanceId `
+            -TargetDatabase $TargetDatabase -RestoreTimeUtc $RestoreTimeUtc -Apply `
+            -ApproveSourceResourceId $ApproveSourceResourceId -ApproveTargetResourceId $ApproveTargetResourceId `
+            -TypedConfirmation $confirmation
     }
     'start' {
         $config = Get-MiOpsConfig -Path $resolvedConfigPath -RepositoryRoot $resolvedDataRoot

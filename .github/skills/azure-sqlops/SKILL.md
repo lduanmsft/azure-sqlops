@@ -13,17 +13,29 @@ Use this skill for prompts such as:
 - "列出所有资源"
 - "列出所有 VM"
 - "列出所有 MI"
+- "列出 dlinger 的数据库和状态"
+- "检查 dlinger 是否有异常备份记录"
+- "把 db1 恢复到 2026-10-10T01:00:00Z，目标名 db1-restore"
+- "把 dlinger/db1 恢复到 lduan-mi-sea/db1-restore"
 - "调查这个 MI"
 - "是否需要扩容"
 - "生成支持工单草稿"
 
-Route setup, inventory, status, start/stop, schedule, and operation polling to `mi-manage`; read-only incident investigation to `mi-troubleshoot`; capacity recommendations to `mi-capacity`; and local Support draft generation to `mi-escalate`.
+Route setup, inventory, database inventory, backup health, PITR planning/apply, status, start/stop, schedule, and operation polling to `mi-manage`; read-only incident investigation to `mi-troubleshoot`; capacity recommendations to `mi-capacity`; and local Support draft generation to `mi-escalate`.
 
 Inventory routing is explicit:
 
 - "列出所有资源" / "list all resources" -> `inventory -ResourceKind all`
 - "列出所有 VM" / "列出所有虚拟机" / "list all VMs" -> `inventory -ResourceKind vm`
 - "列出所有 MI" / "列出所有 Managed Instance" / "list all MIs" -> `inventory -ResourceKind mi`
+
+Database and restore routing is explicit:
+
+- "列出 dlinger 的数据库和状态" -> `database-list`
+- "检查 dlinger 是否有异常备份记录" -> `backup-check`
+- PITR request -> `restore-plan` first, then `restore-apply` only after all deterministic approval gates
+- Restore target onboarding -> `CONFIGURE RESTORE TARGET <mi-name>`
+- Restore submission -> `RESTORE <source-db> TO <target-mi>/<target-db> AT <timestamp>`
 
 An inventory request only returns read-only metadata from the selected/current subscription. It never adds a listed resource to `allowedResourceIds`. If a prompt asks to configure or operate one MI, use the onboarding/lifecycle flow instead of treating inventory output as mutation authorization.
 
@@ -57,8 +69,12 @@ Use only this validated repository-root `miops.ps1`; do not search parent direct
 - Authentication is local through Azure CLI browser or device-code login. Never request, accept, echo, or store passwords, access tokens, refresh tokens, client secrets, or other credentials.
 - Operate only the exact resource ID in `allowedResourceIds`.
 - Inventory may list Azure resources in the validated subscription, but listing never allowlists VM, MI, or other resources for mutation.
+- Database inventory and backup health operate only on an exact source MI in `resource.allowedResourceIds`.
+- Restore targets use the independent `restoreTargets.allowedResourceIds` list. Discovery or source allowlisting never authorizes a restore target. Add one only after `CONFIGURE RESTORE TARGET <mi-name>`.
 - Start, stop, and schedule deletion are dry-run unless the deterministic backend receives `-Apply`, an exact `-ApproveResourceId`, and the exact typed phrase through its prompt or `-TypedConfirmation`.
 - Before lifecycle apply, show the exact MI name, resource ID, and current state and require the operator to type `START <mi-name>` or `STOP <mi-name>`. Schedule deletion requires `DELETE SCHEDULE <mi-name>`. A conversational "yes", tool approval, or menu selection does not satisfy this gate.
 - Persist and return the local operation ID. Call an operation verified only after `operation-poll` observes the desired resource state.
-- Do not provision, delete, resize, fail over, perform VM actions, run arbitrary Azure CLI commands, execute T-SQL, or submit a Support request.
+- Restore is plan-only by default. Apply requires exact source and target resource approvals plus `RESTORE <source-db> TO <target-mi>/<target-db> AT <timestamp>`.
+- The optional SQL backup-history adapter accepts no SQL text. It runs only the fixed `backup-history-v1` read-only query through `sqlcmd -G`.
+- Do not provision, delete, overwrite, resize, fail over, perform VM actions, run arbitrary Azure CLI commands or T-SQL, change retention, delete LTR backups, or submit a Support request.
 - Do not claim Azure MCP Managed Instance lifecycle support or tenant validation.

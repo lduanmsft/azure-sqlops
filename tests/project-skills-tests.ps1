@@ -41,7 +41,13 @@ foreach ($requiredText in @(
     '-TypedConfirmation',
     "inventory -ResourceKind all",
     "inventory -ResourceKind vm",
-    "inventory -ResourceKind mi"
+    "inventory -ResourceKind mi",
+    "database-list",
+    "backup-check",
+    "restore-plan",
+    "restore-apply",
+    "CONFIGURE RESTORE TARGET",
+    "RESTORE <source-db> TO <target-mi>/<target-db> AT <timestamp>"
 )) {
     Assert-True ($routerText.Contains($requiredText)) "Router skill is missing required project or safety guidance: $requiredText"
 }

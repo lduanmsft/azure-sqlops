@@ -24,7 +24,7 @@ Separate:
 - Missing SQL-engine evidence.
 - Recommendation and confidence.
 
-Do not claim DMV, memory, wait, query, or Query Store findings: the SQL adapter is not implemented and Azure RBAC does not grant that access.
+Do not claim DMV, memory, wait, query, or Query Store findings. The only implemented SQL adapter is the fixed backup-history query for `backup-check`; it provides no capacity evidence, and Azure RBAC does not grant SQL data-plane access.
 
 Allowed recommendation outcomes are `no change`, `observe longer`, `investigate SQL adapter evidence`, `consider scale up/down`, or `insufficient evidence`. Include assumptions, risks, cost caveats, and a human change/verification plan.
 
